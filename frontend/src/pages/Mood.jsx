@@ -38,7 +38,15 @@ export default function Mood() {
         setRecommendations(moodRes.data.recommendations);
       }
     } catch (e) {
-      toast.error(e.response?.data?.message || 'Failed to cook recipe');
+      const message = e.response?.data?.message || 'Failed to cook recipe';
+      if (e.response?.data?.shortages) {
+        const shortageDetails = e.response.data.shortages.map(s => 
+          `${s.ingredient}: need ${s.required} ${s.unit}, have ${s.available} ${s.unitAvailable || s.unit}`
+        ).join(', ');
+        toast.error(`${message}. ${shortageDetails}`);
+      } else {
+        toast.error(message);
+      }
       throw e; // Re-throw to keep modal open
     }
   };

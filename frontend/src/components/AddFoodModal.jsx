@@ -6,6 +6,7 @@ const emptyForm = {
   name: '', category: 'Other', quantity: '', unit: 'pieces',
   purchaseDate: new Date().toISOString().split('T')[0],
   expiryDate: '', storageLocation: 'Pantry', price: '', notes: '',
+  packageContent: { quantity: '', unit: 'pieces' },
 };
 
 export default function AddFoodModal({ isOpen, onClose, onSave, editItem }) {
@@ -24,6 +25,7 @@ export default function AddFoodModal({ isOpen, onClose, onSave, editItem }) {
         storageLocation: editItem.storageLocation || 'Pantry',
         price: editItem.price || '',
         notes: editItem.notes || '',
+        packageContent: editItem.packageContent || { quantity: '', unit: 'pieces' },
       });
     } else {
       setForm(emptyForm);
@@ -47,7 +49,24 @@ export default function AddFoodModal({ isOpen, onClose, onSave, editItem }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!validate()) return;
-    onSave({ ...form, quantity: Number(form.quantity), price: form.price ? Number(form.price) : 0 });
+    
+    const data = {
+      ...form,
+      quantity: Number(form.quantity),
+      price: form.price ? Number(form.price) : 0,
+    };
+    
+    // Only include package content if it's filled in
+    if (form.unit === 'packets' && form.packageContent.quantity) {
+      data.packageContent = {
+        quantity: Number(form.packageContent.quantity),
+        unit: form.packageContent.unit
+      };
+    } else {
+      data.packageContent = null;
+    }
+    
+    onSave(data);
   };
 
   const set = (field) => (e) => setForm({ ...form, [field]: e.target.value });
@@ -95,6 +114,37 @@ export default function AddFoodModal({ isOpen, onClose, onSave, editItem }) {
               </select>
             </div>
           </div>
+
+          {form.unit === 'packets' && (
+            <div className="grid grid-cols-2 gap-4 bg-cream/50 p-4 rounded-lg">
+              <div>
+                <label className="block text-sm font-semibold mb-1">Content per Package</label>
+                <input 
+                  type="number" 
+                  step="any" 
+                  className="input-field" 
+                  value={form.packageContent.quantity} 
+                  onChange={(e) => setForm({ ...form, packageContent: { ...form.packageContent, quantity: e.target.value } })}
+                  placeholder="e.g., 20"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold mb-1">Content Unit</label>
+                <select 
+                  className="input-field" 
+                  value={form.packageContent.unit} 
+                  onChange={(e) => setForm({ ...form, packageContent: { ...form.packageContent, unit: e.target.value } })}
+                >
+                  <option value="pieces">Pieces/Slices</option>
+                  <option value="g">Grams</option>
+                  <option value="ml">Milliliters</option>
+                </select>
+              </div>
+              <p className="col-span-2 text-xs text-charcoal/50">
+                Enter package size to enable accurate recipe availability checking (e.g., 20 slices per bread packet)
+              </p>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div>

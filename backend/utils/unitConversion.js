@@ -1,8 +1,10 @@
 // Unit conversion utilities for inventory management
+const { normalizeUnit, convertMassToVolume, convertVolumeToMass, formatConversionDisplay } = require('./ingredientConversions');
 
 const LIQUID_UNITS = ['ml', 'l', 'cups'];
 const WEIGHT_UNITS = ['g', 'kg'];
 const COUNT_UNITS = ['pieces', 'packets'];
+const VOLUME_UNITS = ['ml', 'l', 'cups', 'tablespoons', 'teaspoons'];
 
 const UNIT_TO_BASE = {
   ml: { base: 'ml', factor: 1 },
@@ -17,55 +19,106 @@ const UNIT_TO_BASE = {
 };
 
 function getUnitType(unit) {
-  if (LIQUID_UNITS.includes(unit) || unit === 'tablespoons' || unit === 'teaspoons') return 'liquid';
-  if (WEIGHT_UNITS.includes(unit)) return 'weight';
+  const normalized = normalizeUnit(unit);
+  if (LIQUID_UNITS.includes(normalized) || normalized === 'tablespoons' || normalized === 'teaspoons') return 'liquid';
+  if (WEIGHT_UNITS.includes(normalized)) return 'weight';
   return 'count';
 }
 
 function convertToBase(quantity, unit) {
-  const config = UNIT_TO_BASE[unit];
-  if (!config) return { quantity, baseUnit: unit };
+  const normalized = normalizeUnit(unit);
+  const config = UNIT_TO_BASE[normalized];
+  if (!config) return { quantity, baseUnit: normalized };
   return { quantity: quantity * config.factor, baseUnit: config.base };
 }
 
 function convertFromBase(quantity, baseUnit, targetUnit) {
-  const config = UNIT_TO_BASE[targetUnit];
+  const normalizedTarget = normalizeUnit(targetUnit);
+  const config = UNIT_TO_BASE[normalizedTarget];
   if (!config || config.base !== baseUnit) {
     return { quantity, unit: baseUnit };
   }
-  return { quantity: quantity / config.factor, unit: targetUnit };
+  return { quantity: quantity / config.factor, unit: normalizedTarget };
 }
 
-function canConvert(unit1, unit2) {
-  const type1 = getUnitType(unit1);
-  const type2 = getUnitType(unit2);
-  if (type1 !== type2) return false;
-  const base1 = UNIT_TO_BASE[unit1]?.base;
-  const base2 = UNIT_TO_BASE[unit2]?.base;
-  return base1 === base2;
+function canConvert(unit1, unit2, ingredientName = null) {
+  const normalized1 = normalizeUnit(unit1);
+  const normalized2 = normalizeUnit(unit2);
+  
+  const type1 = getUnitType(normalized1);
+  const type2 = getUnitType(normalized2);
+  
+  // Same type can always convert within same base
+  if (type1 === type2) {
+    const base1 = UNIT_TO_BASE[normalized1]?.base;
+    const base2 = UNIT_TO_BASE[normalized2]?.base;
+    return base1 === base2;
+  }
+  
+  // Mass-volume conversion requires ingredient profile
+  if ((type1 === 'weight' && type2 === 'liquid') || (type1 === 'liquid' && type2 === 'weight')) {
+    if (!ingredientName) return false;
+    const profile = require('./ingredientConversions').getIngredientConversionProfile(ingredientName);
+    return profile !== null;
+  }
+  
+  return false;
 }
 
-function deductQuantity(currentQty, currentUnit, consumedQty, consumedUnit) {
-  if (!canConvert(currentUnit, consumedUnit)) {
+function convertQuantity(quantity, fromUnit, toUnit, ingredientName = null) {
+  const normalizedFrom = normalizeUnit(fromUnit);
+  const normalizedTo = normalizeUnit(toUnit);
+  
+  // Same unit
+  if (normalizedFrom === normalizedTo) {
+    return { success: true, quantity, unit: normalizedTo, isEstimate: false };
+  }
+  
+  // Direct unit conversion within same type
+  if (canConvert(normalizedFrom, normalizedTo)) {
+    const base = convertToBase(quantity, normalizedFrom);
+    const converted = convertFromBase(base.quantity, base.baseUnit, normalizedTo);
+    return { success: true, quantity: converted.quantity, unit: converted.unit, isEstimate: false };
+  }
+  
+  // Mass-volume conversion
+  if (getUnitType(normalizedFrom) === 'weight' && getUnitType(normalizedTo) === 'liquid') {
+    return convertMassToVolume(quantity, normalizedTo, ingredientName);
+  }
+  
+  if (getUnitType(normalizedFrom) === 'liquid' && getUnitType(normalizedTo) === 'weight') {
+    return convertVolumeToMass(quantity, normalizedFrom, ingredientName);
+  }
+  
+  return { success: false, message: 'Cannot convert between these units' };
+}
+
+function deductQuantity(currentQty, currentUnit, consumedQty, consumedUnit, ingredientName = null) {
+  const normalizedCurrent = normalizeUnit(currentUnit);
+  const normalizedConsumed = normalizeUnit(consumedUnit);
+  
+  if (!canConvert(normalizedCurrent, normalizedConsumed, ingredientName)) {
     throw new Error(`Cannot convert between ${currentUnit} and ${consumedUnit}`);
   }
 
-  const current = convertToBase(currentQty, currentUnit);
-  const consumed = convertToBase(consumedQty, consumedUnit);
-
-  const remaining = current.quantity - consumed.quantity;
+  // Convert both to same unit for calculation
+  const conversion = convertQuantity(consumedQty, normalizedConsumed, normalizedCurrent, ingredientName);
+  if (!conversion.success) {
+    throw new Error(conversion.message);
+  }
+  
+  const consumedInCurrentUnit = conversion.quantity;
+  const remaining = currentQty - consumedInCurrentUnit;
 
   if (remaining <= 0) {
-    return { quantity: 0, unit: current.baseUnit, isEmpty: true };
+    return { quantity: 0, unit: normalizedCurrent, isEmpty: true, isEstimate: conversion.isEstimate };
   }
 
-  const display = convertFromBase(remaining, current.baseUnit, currentUnit);
   return {
-    quantity: Math.round(display.quantity * 100) / 100,
-    unit: display.unit,
-    baseQuantity: remaining,
-    baseUnit: current.baseUnit,
+    quantity: Math.round(remaining * 100) / 100,
+    unit: normalizedCurrent,
     isEmpty: false,
+    isEstimate: conversion.isEstimate
   };
 }
 
@@ -104,9 +157,12 @@ module.exports = {
   convertToBase,
   convertFromBase,
   canConvert,
+  convertQuantity,
   deductQuantity,
   formatQuantity,
   normalizeIngredientName,
+  normalizeUnit,
   getUnitType,
   UNIT_TO_BASE,
+  formatConversionDisplay,
 };

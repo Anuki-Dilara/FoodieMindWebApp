@@ -7,7 +7,7 @@ const ShoppingListItem = require('../models/ShoppingListItem');
 const ConsumptionRecord = require('../models/ConsumptionRecord');
 const { auth } = require('../middleware/auth');
 const { recommendRecipes, ingredientMatchesInventory, ingredientExactMatch } = require('../utils/recipeEngine');
-const { deductQuantity, convertToBase, canConvert } = require('../utils/unitConversion');
+const { deductQuantity, convertToBase, convertFromBase, canConvert, convertQuantity, normalizeUnit, formatConversionDisplay } = require('../utils/unitConversion');
 const { getExpiryStatus } = require('../utils/expiryHelper');
 
 const router = express.Router();
@@ -76,9 +76,33 @@ router.get('/:id/ingredient-check', async (req, res) => {
     const ingredientCheck = [];
 
     for (const ing of recipe.ingredients) {
-      const invItem = inventory.find((item) => ingredientExactMatch(ing.name, item.name));
+      // Skip optional ingredients for requirement checking
+      if (ing.isOptional) {
+        ingredientCheck.push({
+          name: ing.name,
+          required: ing.quantity,
+          unit: ing.unit,
+          available: 0,
+          unitAvailable: '',
+          hasEnough: true,
+          status: 'optional',
+          isOptional: true
+        });
+        continue;
+      }
+
+      // Find all matching inventory items (not just the first one)
+      const matchingItems = inventory.filter((item) => ingredientExactMatch(ing.name, item.name));
       
-      if (!invItem) {
+      // Filter out expired items and sort by expiry date (earliest first)
+      const usableItems = matchingItems
+        .filter((item) => {
+          const { status } = getExpiryStatus(item.expiryDate);
+          return status !== 'Expired';
+        })
+        .sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+
+      if (usableItems.length === 0) {
         ingredientCheck.push({
           name: ing.name,
           required: ing.quantity,
@@ -86,60 +110,105 @@ router.get('/:id/ingredient-check', async (req, res) => {
           available: 0,
           unitAvailable: '',
           hasEnough: false,
-          status: 'missing'
+          status: 'missing',
+          missing: ing.quantity,
+          conversionInfo: null
         });
-      } else {
-        // Check if item is expired
-        const { status } = getExpiryStatus(invItem.expiryDate);
-        if (status === 'Expired') {
-          ingredientCheck.push({
-            name: ing.name,
-            required: ing.quantity,
-            unit: ing.unit,
-            available: 0,
-            unitAvailable: invItem.unit,
-            hasEnough: false,
-            status: 'expired'
+        continue;
+      }
+
+      // Handle package content (e.g., bread packets)
+      let effectiveUsableItems = usableItems;
+      for (const item of usableItems) {
+        if (item.unit === 'packets' && item.packageContent && item.packageContent.quantity) {
+          // Create virtual item with unpacked quantity
+          effectiveUsableItems = effectiveUsableItems.filter(i => i._id.toString() !== item._id.toString());
+          effectiveUsableItems.push({
+            ...item.toObject(),
+            quantity: item.quantity * item.packageContent.quantity,
+            unit: item.packageContent.unit,
+            isVirtual: true,
+            originalItemId: item._id
           });
-        } else {
-          // Check quantity compatibility
-          try {
-            if (canConvert(invItem.unit, ing.unit)) {
-              const result = deductQuantity(invItem.quantity, invItem.unit, ing.quantity, ing.unit);
-              ingredientCheck.push({
-                name: ing.name,
-                required: ing.quantity,
-                unit: ing.unit,
-                available: invItem.quantity,
-                unitAvailable: invItem.unit,
-                hasEnough: !result.isEmpty,
-                status: result.isEmpty ? 'insufficient' : 'available'
-              });
-            } else {
-              // Incompatible units
-              ingredientCheck.push({
-                name: ing.name,
-                required: ing.quantity,
-                unit: ing.unit,
-                available: invItem.quantity,
-                unitAvailable: invItem.unit,
-                hasEnough: false,
-                status: 'incompatible'
-              });
-            }
-          } catch (error) {
-            ingredientCheck.push({
-              name: ing.name,
-              required: ing.quantity,
-              unit: ing.unit,
-              available: invItem.quantity,
-              unitAvailable: invItem.unit,
-              hasEnough: false,
-              status: 'error'
-            });
-          }
         }
       }
+
+      // Try to combine quantities from all usable items
+      let totalAvailable = 0;
+      let availableUnit = ing.unit; // Default to recipe unit
+      let canCombine = true;
+      let conversionInfo = null;
+      let missingInfo = null;
+
+      // Check if we can convert all items to recipe unit
+      for (const item of effectiveUsableItems) {
+        try {
+          const normalizedItemUnit = normalizeUnit(item.unit);
+          const normalizedRecipeUnit = normalizeUnit(ing.unit);
+          
+          // Try to convert item quantity to recipe unit
+          const conversion = convertQuantity(item.quantity, normalizedItemUnit, normalizedRecipeUnit, ing.name);
+          
+          if (!conversion.success) {
+            canCombine = false;
+            missingInfo = conversion.message;
+            break;
+          }
+          
+          totalAvailable += conversion.quantity;
+          
+          // Track conversion info for display
+          if (conversion.isEstimate) {
+            conversionInfo = {
+              isEstimate: true,
+              source: conversion.source,
+              originalUnit: normalizedItemUnit,
+              convertedUnit: normalizedRecipeUnit
+            };
+          }
+        } catch (error) {
+          canCombine = false;
+          missingInfo = error.message;
+          break;
+        }
+      }
+
+      if (!canCombine) {
+        ingredientCheck.push({
+          name: ing.name,
+          required: ing.quantity,
+          unit: ing.unit,
+          available: effectiveUsableItems[0].quantity,
+          unitAvailable: effectiveUsableItems[0].unit,
+          hasEnough: false,
+          status: 'conversion_needed',
+          missing: ing.quantity,
+          conversionInfo: null,
+          missingInfo
+        });
+        continue;
+      }
+
+      // Compare with required amount
+      const hasEnough = totalAvailable >= ing.quantity;
+      const missing = hasEnough ? 0 : ing.quantity - totalAvailable;
+      
+      // Calculate what will remain after cooking
+      const remaining = hasEnough ? totalAvailable - ing.quantity : 0;
+
+      ingredientCheck.push({
+        name: ing.name,
+        required: ing.quantity,
+        unit: ing.unit,
+        available: Math.round(totalAvailable * 100) / 100,
+        unitAvailable: ing.unit,
+        hasEnough,
+        status: hasEnough ? 'available' : 'insufficient',
+        missing: Math.round(missing * 100) / 100,
+        remaining: Math.round(remaining * 100) / 100,
+        conversionInfo,
+        missingInfo: null
+      });
     }
 
     res.json({ ingredients: ingredientCheck });
@@ -153,114 +222,243 @@ router.post('/:id/cooked', async (req, res) => {
     const recipe = await Recipe.findById(req.params.id);
     if (!recipe) return res.status(404).json({ message: 'Recipe not found.' });
 
+    // Reload inventory to get latest state
     const inventory = await FoodItem.find({ userId: req.userId });
+    const shortages = [];
+
+    // First pass: validate all ingredients are available in sufficient quantities
+    for (const ing of recipe.ingredients) {
+      // Skip optional ingredients
+      if (ing.isOptional) continue;
+
+      const matchingItems = inventory.filter((item) => ingredientExactMatch(ing.name, item.name));
+      const usableItems = matchingItems
+        .filter((item) => {
+          const { status } = getExpiryStatus(item.expiryDate);
+          return status !== 'Expired';
+        })
+        .sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+
+      if (usableItems.length === 0) {
+        shortages.push({
+          ingredient: ing.name,
+          required: ing.quantity,
+          unit: ing.unit,
+          available: 0,
+          reason: 'missing'
+        });
+        continue;
+      }
+
+      // Handle package content
+      let effectiveUsableItems = usableItems;
+      for (const item of usableItems) {
+        if (item.unit === 'packets' && item.packageContent && item.packageContent.quantity) {
+          effectiveUsableItems = effectiveUsableItems.filter(i => i._id.toString() !== item._id.toString());
+          effectiveUsableItems.push({
+            ...item.toObject(),
+            quantity: item.quantity * item.packageContent.quantity,
+            unit: item.packageContent.unit,
+            isVirtual: true,
+            originalItemId: item._id
+          });
+        }
+      }
+
+      // Check conversion and combine quantities
+      let totalAvailable = 0;
+      let hasConversionError = false;
+
+      for (const item of effectiveUsableItems) {
+        try {
+          const normalizedItemUnit = normalizeUnit(item.unit);
+          const normalizedRecipeUnit = normalizeUnit(ing.unit);
+          const conversion = convertQuantity(item.quantity, normalizedItemUnit, normalizedRecipeUnit, ing.name);
+          
+          if (!conversion.success) {
+            hasConversionError = true;
+            shortages.push({
+              ingredient: ing.name,
+              required: ing.quantity,
+              unit: ing.unit,
+              available: item.quantity,
+              unitAvailable: item.unit,
+              reason: 'conversion_needed',
+              missingInfo: conversion.message
+            });
+            break;
+          }
+          
+          totalAvailable += conversion.quantity;
+        } catch (error) {
+          hasConversionError = true;
+          shortages.push({
+            ingredient: ing.name,
+            required: ing.quantity,
+            unit: ing.unit,
+            available: item.quantity,
+            unitAvailable: item.unit,
+            reason: 'conversion_error',
+            missingInfo: error.message
+          });
+          break;
+        }
+      }
+
+      if (hasConversionError) continue;
+
+      // Compare with required amount
+      if (totalAvailable < ing.quantity) {
+        shortages.push({
+          ingredient: ing.name,
+          required: ing.quantity,
+          unit: ing.unit,
+          available: Math.round(totalAvailable * 100) / 100,
+          unitAvailable: ing.unit,
+          missing: Math.round((ing.quantity - totalAvailable) * 100) / 100,
+          reason: 'insufficient'
+        });
+      }
+    }
+
+    // If any shortages found, reject cooking
+    if (shortages.length > 0) {
+      return res.status(400).json({
+        message: 'Insufficient ingredients to cook this recipe.',
+        shortages,
+        canCook: false
+      });
+    }
+
+    // Second pass: actually deduct the ingredients (all are available)
     const ingredientsUsed = [];
     const addedToShoppingList = [];
 
     for (const ing of recipe.ingredients) {
-      const invItem = inventory.find((item) => ingredientExactMatch(ing.name, item.name));
-      if (!invItem) {
-        // Add missing ingredient to shopping list
-        const existing = await ShoppingListItem.findOne({
-          userId: req.userId,
-          name: { $regex: new RegExp(`^${ing.name}$`, 'i') },
-          status: 'Pending',
-        });
-        if (!existing) {
-          await ShoppingListItem.create({
-            userId: req.userId,
-            name: ing.name,
-            quantity: ing.quantity,
-            unit: ing.unit,
-            source: 'recipe',
-            priority: 'Medium',
+      // Skip optional ingredients
+      if (ing.isOptional) continue;
+
+      const matchingItems = inventory.filter((item) => ingredientExactMatch(ing.name, item.name));
+      const usableItems = matchingItems
+        .filter((item) => {
+          const { status } = getExpiryStatus(item.expiryDate);
+          return status !== 'Expired';
+        })
+        .sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+
+      // Handle package content
+      let effectiveUsableItems = usableItems;
+      for (const item of usableItems) {
+        if (item.unit === 'packets' && item.packageContent && item.packageContent.quantity) {
+          effectiveUsableItems = effectiveUsableItems.filter(i => i._id.toString() !== item._id.toString());
+          effectiveUsableItems.push({
+            ...item.toObject(),
+            quantity: item.quantity * item.packageContent.quantity,
+            unit: item.packageContent.unit,
+            isVirtual: true,
+            originalItemId: item._id
           });
-          addedToShoppingList.push(ing.name);
         }
-        continue;
       }
 
-      // Check if item is expired
-      const { status } = getExpiryStatus(invItem.expiryDate);
-      if (status === 'Expired') {
-        // Add expired item to shopping list
-        const existing = await ShoppingListItem.findOne({
-          userId: req.userId,
-          name: { $regex: new RegExp(`^${ing.name}$`, 'i') },
-          status: 'Pending',
-        });
-        if (!existing) {
-          await ShoppingListItem.create({
-            userId: req.userId,
-            name: ing.name,
-            quantity: ing.quantity,
-            unit: ing.unit,
-            source: 'recipe',
-            priority: 'Medium',
-          });
-          addedToShoppingList.push(ing.name);
-        }
-        continue;
-      }
+      let remainingToDeduct = ing.quantity;
+      
+      for (const item of effectiveUsableItems) {
+        if (remainingToDeduct <= 0) break;
 
-      try {
-        const result = deductQuantity(invItem.quantity, invItem.unit, ing.quantity, ing.unit);
-        ingredientsUsed.push({ name: ing.name, quantity: ing.quantity, unit: ing.unit });
-
-        const consumedBase = convertToBase(ing.quantity, ing.unit);
-        const pricePerBase = invItem.baseQuantity > 0 ? invItem.price / invItem.baseQuantity : 0;
-
-        await ConsumptionRecord.create({
-          userId: req.userId,
-          foodId: invItem._id,
-          foodName: invItem.name,
-          consumedQuantity: ing.quantity,
-          consumedUnit: ing.unit,
-          priceValue: Math.round(pricePerBase * consumedBase.quantity * 100) / 100,
-        });
-
-        if (result.isEmpty) {
-          await FoodItem.findByIdAndDelete(invItem._id);
-          const existing = await ShoppingListItem.findOne({
-            userId: req.userId,
-            name: { $regex: new RegExp(`^${invItem.name}$`, 'i') },
-            status: 'Pending',
-          });
-          if (!existing) {
-            await ShoppingListItem.create({
-              userId: req.userId,
-              name: invItem.name,
-              quantity: 1,
-              unit: invItem.unit,
-              source: 'consumed',
-              priority: 'Medium',
-            });
-            addedToShoppingList.push(invItem.name);
+        try {
+          const normalizedItemUnit = normalizeUnit(item.unit);
+          const normalizedRecipeUnit = normalizeUnit(ing.unit);
+          
+          // Convert what we can deduct from this item
+          const conversion = convertQuantity(item.quantity, normalizedItemUnit, normalizedRecipeUnit, ing.name);
+          if (!conversion.success) continue;
+          
+          const availableInRecipeUnit = conversion.quantity;
+          const deductAmount = Math.min(remainingToDeduct, availableInRecipeUnit);
+          
+          // Convert back to item's unit for deduction
+          const reverseConversion = convertQuantity(deductAmount, normalizedRecipeUnit, normalizedItemUnit, ing.name);
+          if (!reverseConversion.success) continue;
+          
+          const deductInItemUnit = reverseConversion.quantity;
+          const result = deductQuantity(item.quantity, normalizedItemUnit, deductInItemUnit, normalizedItemUnit, ing.name);
+          
+          // Handle virtual items (from package content)
+          if (item.isVirtual) {
+            const originalItem = await FoodItem.findById(item.originalItemId);
+            if (originalItem) {
+              // Calculate how many packets were used
+              const packetsUsed = Math.ceil(deductInItemUnit / item.packageContent.quantity);
+              const remainingPackets = originalItem.quantity - packetsUsed;
+              
+              if (remainingPackets <= 0) {
+                await FoodItem.findByIdAndDelete(originalItem._id);
+                const existing = await ShoppingListItem.findOne({
+                  userId: req.userId,
+                  name: { $regex: new RegExp(`^${originalItem.name}$`, 'i') },
+                  status: 'Pending',
+                });
+                if (!existing) {
+                  await ShoppingListItem.create({
+                    userId: req.userId,
+                    name: originalItem.name,
+                    quantity: 1,
+                    unit: originalItem.unit,
+                    source: 'consumed',
+                    priority: 'Medium',
+                  });
+                  addedToShoppingList.push(originalItem.name);
+                }
+              } else {
+                originalItem.quantity = remainingPackets;
+                await originalItem.save();
+              }
+            }
+          } else {
+            // Regular item deduction
+            if (result.isEmpty) {
+              await FoodItem.findByIdAndDelete(item._id);
+              const existing = await ShoppingListItem.findOne({
+                userId: req.userId,
+                name: { $regex: new RegExp(`^${item.name}$`, 'i') },
+                status: 'Pending',
+              });
+              if (!existing) {
+                await ShoppingListItem.create({
+                  userId: req.userId,
+                  name: item.name,
+                  quantity: 1,
+                  unit: item.unit,
+                  source: 'consumed',
+                  priority: 'Medium',
+                });
+                addedToShoppingList.push(item.name);
+              }
+            } else {
+              item.quantity = result.quantity;
+              await item.save();
+            }
           }
-        } else {
-          invItem.quantity = result.quantity;
-          invItem.unit = result.unit;
-          invItem.baseQuantity = result.baseQuantity;
-          invItem.baseUnit = result.baseUnit;
-          await invItem.save();
-        }
-      } catch (e) {
-        // Add incompatible unit items to shopping list
-        const existing = await ShoppingListItem.findOne({
-          userId: req.userId,
-          name: { $regex: new RegExp(`^${ing.name}$`, 'i') },
-          status: 'Pending',
-        });
-        if (!existing) {
-          await ShoppingListItem.create({
+
+          ingredientsUsed.push({ name: ing.name, quantity: deductAmount, unit: ing.unit });
+          
+          // Record consumption
+          const consumedBase = convertToBase(deductAmount, ing.unit);
+          const pricePerBase = item.baseQuantity > 0 ? item.price / item.baseQuantity : 0;
+
+          await ConsumptionRecord.create({
             userId: req.userId,
-            name: ing.name,
-            quantity: ing.quantity,
-            unit: ing.unit,
-            source: 'recipe',
-            priority: 'Medium',
+            foodId: item._id,
+            foodName: item.name,
+            consumedQuantity: deductAmount,
+            consumedUnit: ing.unit,
+            priceValue: Math.round(pricePerBase * consumedBase.quantity * 100) / 100,
           });
-          addedToShoppingList.push(ing.name);
+
+          remainingToDeduct -= deductAmount;
+        } catch (e) {
+          console.error('Error deducting ingredient:', e);
         }
       }
     }
@@ -276,6 +474,7 @@ router.post('/:id/cooked', async (req, res) => {
       message: 'Yay! Recipe cooked and pantry updated.',
       ingredientsUsed,
       addedToShoppingList,
+      canCook: true
     });
   } catch (error) {
     res.status(500).json({ message: 'Failed to mark recipe as cooked.', error: error.message });

@@ -15,10 +15,19 @@ const foodItemSchema = new mongoose.Schema({
   baseQuantity: { type: Number, required: true },
   unit: {
     type: String,
-    enum: ['ml', 'l', 'g', 'kg', 'pieces', 'packets', 'cups', 'tablespoons', 'teaspoons'],
+    enum: ['ml', 'l', 'g', 'kg', 'pieces', 'packets', 'cups', 'tablespoons', 'teaspoons', 'tbsp', 'tsp'],
     required: true,
   },
   baseUnit: { type: String, required: true },
+  // Package content information for items like bread packets
+  packageContent: {
+    quantity: { type: Number, default: null },
+    unit: {
+      type: String,
+      enum: ['pieces', 'g', 'ml'],
+      default: 'pieces'
+    }
+  },
   purchaseDate: { type: Date, default: Date.now },
   expiryDate: { type: Date, required: true },
   storageLocation: { type: String, default: 'Pantry' },

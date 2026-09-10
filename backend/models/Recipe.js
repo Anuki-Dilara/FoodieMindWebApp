@@ -4,6 +4,7 @@ const ingredientSchema = new mongoose.Schema({
   name: { type: String, required: true },
   quantity: { type: Number, default: 1 },
   unit: { type: String, default: 'pieces' },
+  isOptional: { type: Boolean, default: false },
 }, { _id: false });
 
 const nutritionSchema = new mongoose.Schema({

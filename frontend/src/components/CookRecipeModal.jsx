@@ -5,6 +5,7 @@ import API from '../utils/api';
 export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) {
   const [loading, setLoading] = useState(false);
   const [ingredientAvailability, setIngredientAvailability] = useState([]);
+  const [checkingAvailability, setCheckingAvailability] = useState(false);
 
   useEffect(() => {
     if (isOpen && recipe) {
@@ -13,12 +14,15 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
   }, [isOpen, recipe]);
 
   const fetchIngredientAvailability = async () => {
+    setCheckingAvailability(true);
     try {
       const res = await API.get(`/recipes/${recipe._id}/ingredient-check`);
       setIngredientAvailability(res.data.ingredients || []);
     } catch (error) {
       console.error('Failed to check ingredient availability:', error);
       setIngredientAvailability([]);
+    } finally {
+      setCheckingAvailability(false);
     }
   };
 
@@ -39,6 +43,25 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
     if (!availability) return { status: 'missing', color: 'text-danger', icon: '❌' };
     if (availability.hasEnough) return { status: 'available', color: 'text-success', icon: '✅' };
     return { status: 'insufficient', color: 'text-warning', icon: '⚠️' };
+  };
+
+  const canCookRecipe = () => {
+    if (checkingAvailability) return false;
+    return ingredientAvailability.length > 0 && ingredientAvailability.every(ing => 
+      ing.hasEnough || ing.status === 'optional'
+    );
+  };
+
+  const getCookingMessage = () => {
+    if (checkingAvailability) return 'Checking ingredient availability...';
+    
+    const needsConversion = ingredientAvailability.some(ing => ing.status === 'conversion_needed');
+    if (needsConversion) {
+      return 'Some ingredients need conversion information. Add the missing conversion details to enable cooking.';
+    }
+    
+    if (canCookRecipe()) return 'You have enough ingredients to cook this recipe.';
+    return 'You don\'t have enough ingredients to cook this recipe. Add the missing quantities to your inventory first.';
   };
 
   if (!isOpen || !recipe) return null;
@@ -111,6 +134,16 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
                 const { status, color, icon } = getIngredientStatus(ing);
                 const availability = ingredientAvailability.find(a => a.name === ing.name);
                 
+                // Build conversion display
+                let conversionDisplay = null;
+                if (availability && availability.conversionInfo && availability.conversionInfo.isEstimate) {
+                  conversionDisplay = (
+                    <div className="text-xs text-charcoal/50 italic">
+                      {availability.conversionInfo.originalUnit} ≈ {availability.conversionInfo.convertedUnit} (estimated)
+                    </div>
+                  );
+                }
+                
                 return (
                   <div key={i} className="flex justify-between items-start py-2 border-b border-primary/10 last:border-0">
                     <div className="flex items-center gap-2">
@@ -118,11 +151,27 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
                       <span className="text-sm">{ing.name}</span>
                     </div>
                     <div className="text-right">
-                      <div className="text-sm font-medium">{ing.quantity} {ing.unit}</div>
-                      {status === 'insufficient' && availability && (
-                        <div className="text-xs text-warning">
-                          Have: {availability.available} {availability.unit} • Need: {ing.quantity} {ing.unit}
-                        </div>
+                      <div className="text-sm font-medium">Required: {ing.quantity} {ing.unit}</div>
+                      {availability && (
+                        <>
+                          <div className="text-xs text-charcoal/60">
+                            Available: {availability.available} {availability.unitAvailable || availability.unit}
+                            {availability.remaining !== undefined && availability.remaining > 0 && (
+                              <span className="text-success ml-2">• After cooking: {availability.remaining} {ing.unit}</span>
+                            )}
+                          </div>
+                          {status === 'insufficient' && availability.missing > 0 && (
+                            <div className="text-xs text-warning">
+                              Short: {availability.missing} {ing.unit}
+                            </div>
+                          )}
+                          {availability.missingInfo && (
+                            <div className="text-xs text-warning">
+                              {availability.missingInfo}
+                            </div>
+                          )}
+                          {conversionDisplay}
+                        </>
                       )}
                     </div>
                   </div>
@@ -177,9 +226,12 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
           )}
 
           {/* Notice */}
-          <div className="bg-info/10 border border-info/20 rounded-xl p-4 mb-4">
+          <div className={`rounded-xl p-4 mb-4 ${canCookRecipe() ? 'bg-success/10 border border-success/20' : 'bg-warning/10 border border-warning/20'}`}>
             <p className="text-sm text-charcoal/70">
-              <span className="font-semibold">Cooking notice:</span> Confirming cooking will deduct available ingredients used. Missing quantities will be added to your Shopping List.
+              <span className="font-semibold">Cooking notice:</span> Cooking will deduct the required quantities from your inventory.
+            </p>
+            <p className="text-sm mt-2 text-charcoal/60">
+              {getCookingMessage()}
             </p>
           </div>
         </div>
@@ -189,9 +241,9 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
           <div className="flex gap-3">
             <CuteButton
               variant="primary"
-              className="flex-1"
+              className={`flex-1 ${!canCookRecipe() ? 'opacity-50 cursor-not-allowed' : ''}`}
               onClick={handleCook}
-              disabled={loading}
+              disabled={loading || !canCookRecipe()}
             >
               {loading ? 'Cooking...' : '🎉 Confirm Cooking'}
             </CuteButton>
