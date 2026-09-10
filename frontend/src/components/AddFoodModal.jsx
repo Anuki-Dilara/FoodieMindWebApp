@@ -72,7 +72,7 @@ export default function AddFoodModal({ isOpen, onClose, onSave, editItem }) {
   const set = (field) => (e) => setForm({ ...form, [field]: e.target.value });
 
   return (
-    <div className="fixed inset-0 bg-charcoal/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-charcoal/40 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-soft max-w-lg w-full max-h-[90vh] overflow-y-auto animate-fade-in">
         <div className="p-6 border-b border-primary/10">
           <h2 className="text-xl font-bold text-charcoal">

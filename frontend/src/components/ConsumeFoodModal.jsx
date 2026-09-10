@@ -22,7 +22,7 @@ export default function ConsumeFoodModal({ isOpen, onClose, item, onConfirm }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-charcoal/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-charcoal/40 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-soft max-w-md w-full animate-fade-in p-6">
         <h2 className="text-xl font-bold text-charcoal mb-1">🍽️ Mark as Consumed</h2>
         <p className="text-sm text-charcoal/60 mb-4">How much of <strong>{item.name}</strong> did you use?</p>

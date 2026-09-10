@@ -44,7 +44,7 @@ export default function NotificationDropdown() {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-soft z-50 border border-primary/10 animate-fade-in">
+          <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-soft z-[60] border border-primary/10 animate-fade-in">
             <div className="p-4 border-b border-primary/10 flex justify-between items-center">
               <h3 className="font-bold">Notifications</h3>
               <Link to="/notifications" onClick={() => setOpen(false)} className="text-sm text-primary font-semibold hover:underline">

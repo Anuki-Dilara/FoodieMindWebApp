@@ -5,10 +5,12 @@ const FoodItem = require('../models/FoodItem');
 const CookedRecipe = require('../models/CookedRecipe');
 const ShoppingListItem = require('../models/ShoppingListItem');
 const ConsumptionRecord = require('../models/ConsumptionRecord');
+const User = require('../models/User');
 const { auth } = require('../middleware/auth');
 const { recommendRecipes, ingredientMatchesInventory, ingredientExactMatch } = require('../utils/recipeEngine');
 const { deductQuantity, convertToBase, convertFromBase, canConvert, convertQuantity, normalizeUnit, formatConversionDisplay } = require('../utils/unitConversion');
 const { getExpiryStatus } = require('../utils/expiryHelper');
+const { findSubstitutions, applySubstitution } = require('../services/substitutionService');
 
 const router = express.Router();
 
@@ -248,12 +250,33 @@ router.post('/:id/cooked', async (req, res) => {
     const recipe = await Recipe.findById(req.params.id);
     if (!recipe) return res.status(404).json({ message: 'Recipe not found.' });
 
+    // Get custom servings and substitutions from request body
+    const selectedServings = req.body.servings || recipe.servings;
+    const acceptedSubstitutions = req.body.substitutions || [];
+    const scaleFactor = selectedServings / recipe.servings;
+
+    // Apply substitutions to recipe if any
+    let workingRecipe = recipe;
+    for (const sub of acceptedSubstitutions) {
+      const IngredientSubstitution = require('../models/IngredientSubstitution');
+      const substitution = await IngredientSubstitution.findById(sub.substitutionId);
+      if (substitution) {
+        const user = await User.findById(req.userId);
+        const result = await applySubstitution(workingRecipe, substitution, user);
+        if (result.success) {
+          workingRecipe = result.updatedRecipe;
+        }
+      }
+    }
+
     // Reload inventory to get latest state
     const inventory = await FoodItem.find({ userId: req.userId });
     const shortages = [];
 
     // First pass: validate all ingredients are available in sufficient quantities
-    for (const ing of recipe.ingredients) {
+    for (const ing of workingRecipe.ingredients) {
+      // Scale ingredient quantity based on custom servings
+      const scaledQuantity = ing.quantity * scaleFactor;
       // Skip optional ingredients
       if (ing.isOptional) continue;
 
@@ -268,7 +291,7 @@ router.post('/:id/cooked', async (req, res) => {
       if (usableItems.length === 0) {
         shortages.push({
           ingredient: ing.name,
-          required: ing.quantity,
+          required: scaledQuantity,
           unit: ing.unit,
           available: 0,
           reason: 'missing'
@@ -334,14 +357,14 @@ router.post('/:id/cooked', async (req, res) => {
       if (hasConversionError) continue;
 
       // Compare with required amount
-      if (totalAvailable < ing.quantity) {
+      if (totalAvailable < scaledQuantity) {
         shortages.push({
           ingredient: ing.name,
-          required: ing.quantity,
+          required: scaledQuantity,
           unit: ing.unit,
           available: Math.round(totalAvailable * 100) / 100,
           unitAvailable: ing.unit,
-          missing: Math.round((ing.quantity - totalAvailable) * 100) / 100,
+          missing: Math.round((scaledQuantity - totalAvailable) * 100) / 100,
           reason: 'insufficient'
         });
       }
@@ -360,9 +383,12 @@ router.post('/:id/cooked', async (req, res) => {
     const ingredientsUsed = [];
     const addedToShoppingList = [];
 
-    for (const ing of recipe.ingredients) {
+    for (const ing of workingRecipe.ingredients) {
       // Skip optional ingredients
       if (ing.isOptional) continue;
+
+      // Scale ingredient quantity based on custom servings
+      const scaledQuantity = ing.quantity * scaleFactor;
 
       const matchingItems = inventory.filter((item) => ingredientExactMatch(ing.name, item.name));
       const usableItems = matchingItems
@@ -387,7 +413,7 @@ router.post('/:id/cooked', async (req, res) => {
         }
       }
 
-      let remainingToDeduct = ing.quantity;
+      let remainingToDeduct = scaledQuantity;
       
       for (const item of effectiveUsableItems) {
         if (remainingToDeduct <= 0) break;
@@ -494,6 +520,12 @@ router.post('/:id/cooked', async (req, res) => {
       recipeId: recipe._id,
       recipeName: recipe.name,
       ingredientsUsed,
+      servings: selectedServings,
+      substitutionsUsed: acceptedSubstitutions.map(sub => ({
+        originalIngredient: sub.originalIngredient,
+        substituteIngredient: sub.substituteIngredient,
+        substitutionId: sub.substitutionId,
+      })),
     });
 
     res.json({
@@ -504,6 +536,73 @@ router.post('/:id/cooked', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: 'Failed to mark recipe as cooked.', error: error.message });
+  }
+});
+
+// Substitution endpoints
+router.get('/:id/substitutions', async (req, res) => {
+  try {
+    const recipe = await Recipe.findById(req.params.id);
+    if (!recipe) return res.status(404).json({ message: 'Recipe not found.' });
+
+    const inventory = await FoodItem.find({ userId: req.userId });
+    const missingIngredients = [];
+
+    // Find missing ingredients
+    for (const ing of recipe.ingredients) {
+      if (ing.isOptional) continue;
+
+      const matchingItems = inventory.filter((item) =>
+        ingredientExactMatch(ing.name, item.name)
+      );
+      const usableItems = matchingItems.filter((item) => {
+        const { status } = getExpiryStatus(item.expiryDate);
+        return status !== 'Expired';
+      });
+
+      if (usableItems.length === 0) {
+        missingIngredients.push(ing);
+      }
+    }
+
+    const substitutions = await findSubstitutions(missingIngredients, inventory, recipe.mealType);
+
+    res.json({
+      missingIngredients,
+      substitutions,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to find substitutions.', error: error.message });
+  }
+});
+
+router.post('/:id/apply-substitution', async (req, res) => {
+  try {
+    const { substitutionId } = req.body;
+    const recipe = await Recipe.findById(req.params.id);
+    const user = await User.findById(req.userId);
+    
+    if (!recipe) return res.status(404).json({ message: 'Recipe not found.' });
+
+    const IngredientSubstitution = require('../models/IngredientSubstitution');
+    const substitution = await IngredientSubstitution.findById(substitutionId);
+    
+    if (!substitution) {
+      return res.status(404).json({ message: 'Substitution not found.' });
+    }
+
+    const result = await applySubstitution(recipe, substitution, user);
+
+    if (!result.success) {
+      return res.status(400).json({ message: result.reason });
+    }
+
+    res.json({
+      message: 'Substitution applied successfully',
+      updatedRecipe: result.updatedRecipe,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to apply substitution.', error: error.message });
   }
 });
 

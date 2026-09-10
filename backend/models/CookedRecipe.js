@@ -13,6 +13,12 @@ const cookedRecipeSchema = new mongoose.Schema({
   cookedDate: { type: Date, default: Date.now },
   ingredientsUsed: [{ name: String, quantity: Number, unit: String }],
   recipeSnapshot: { type: mongoose.Schema.Types.Mixed, default: null },
+  servings: { type: Number, default: null }, // Track custom serving count
+  substitutionsUsed: [{
+    originalIngredient: String,
+    substituteIngredient: String,
+    substitutionId: mongoose.Schema.Types.ObjectId,
+  }], // Track substitutions used
 });
 
 module.exports = mongoose.model('CookedRecipe', cookedRecipeSchema);

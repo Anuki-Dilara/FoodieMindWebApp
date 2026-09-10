@@ -6,6 +6,8 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
   const [loading, setLoading] = useState(false);
   const [ingredientAvailability, setIngredientAvailability] = useState([]);
   const [checkingAvailability, setCheckingAvailability] = useState(false);
+  const [substitutions, setSubstitutions] = useState([]);
+  const [acceptedSubstitutions, setAcceptedSubstitutions] = useState([]);
 
   useEffect(() => {
     if (isOpen && recipe) {
@@ -18,6 +20,13 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
     try {
       const res = await API.get(`/recipes/${recipe._id}/ingredient-check`);
       setIngredientAvailability(res.data.ingredients || []);
+      
+      // Fetch substitutions if there are missing ingredients
+      const missing = res.data.ingredients.filter(ing => !ing.hasEnough && ing.status !== 'optional');
+      if (missing.length > 0) {
+        const subRes = await API.get(`/recipes/${recipe._id}/substitutions`);
+        setSubstitutions(subRes.data.substitutions || []);
+      }
     } catch (error) {
       console.error('Failed to check ingredient availability:', error);
       setIngredientAvailability([]);
@@ -29,13 +38,36 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
   const handleCook = async () => {
     setLoading(true);
     try {
-      await onConfirm(recipe);
+      await onConfirm(recipe, acceptedSubstitutions);
+      setAcceptedSubstitutions([]); // Reset after cooking
       onClose();
     } catch (error) {
       // Keep modal open on error
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleAcceptSubstitution = async (substitution) => {
+    try {
+      const res = await API.post(`/recipes/${recipe._id}/apply-substitution`, {
+        substitutionId: substitution.substitutionId,
+      });
+      
+      setAcceptedSubstitutions([...acceptedSubstitutions, substitution]);
+      
+      // Refresh ingredient availability with the substituted recipe
+      await fetchIngredientAvailability();
+      
+      toast.success('Substitution applied successfully');
+    } catch (error) {
+      toast.error('Failed to apply substitution');
+    }
+  };
+
+  const handleRemoveSubstitution = (substitution) => {
+    setAcceptedSubstitutions(acceptedSubstitutions.filter(s => s.substitutionId !== substitution.substitutionId));
+    fetchIngredientAvailability();
   };
 
   const getIngredientStatus = (ing) => {
@@ -67,7 +99,7 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
   if (!isOpen || !recipe) return null;
 
   return (
-    <div className="fixed inset-0 bg-charcoal/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-charcoal/40 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-soft max-w-2xl w-full animate-fade-in max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="p-6 border-b border-primary/10">
@@ -76,7 +108,10 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
               <h2 className="text-xl font-bold text-charcoal mb-1">👨‍🍳 Cook {recipe.name}?</h2>
               <div className="flex items-center gap-4 text-sm text-charcoal/60">
                 <span>⏱ {recipe.cookingTime} min</span>
-                <span>🍽 {recipe.servings} servings</span>
+                <span>🍽 {recipe.selectedServings || recipe.servings} servings</span>
+                {recipe.selectedServings && recipe.selectedServings !== recipe.servings && (
+                  <span className="text-accent">(scaled from {recipe.servings})</span>
+                )}
               </div>
             </div>
             <button
@@ -187,6 +222,58 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
               })}
             </div>
           </div>
+
+          {/* Substitutions */}
+          {substitutions.length > 0 && (
+            <div className="mb-6">
+              <h3 className="font-semibold text-charcoal mb-3">🔄 Ingredient Substitutions</h3>
+              <div className="bg-cream rounded-xl p-4 space-y-3">
+                {substitutions.map((sub, i) => (
+                  <div key={i} className="bg-white rounded-lg p-3 border border-primary/10">
+                    <div className="flex items-start justify-between mb-2">
+                      <div>
+                        <div className="text-sm font-medium text-charcoal">
+                          {sub.originalIngredient} → {sub.substituteIngredient}
+                        </div>
+                        <div className="text-xs text-charcoal/60">
+                          {sub.conversionRule}
+                        </div>
+                      </div>
+                      {acceptedSubstitutions.find(s => s.substitutionId === sub.substitutionId) ? (
+                        <span className="text-xs bg-success/20 text-success px-2 py-1 rounded">Accepted</span>
+                      ) : (
+                        <CuteButton
+                          variant="primary"
+                          className="!py-1 !px-3 text-xs"
+                          onClick={() => handleAcceptSubstitution(sub)}
+                        >
+                          Accept
+                        </CuteButton>
+                      )}
+                    </div>
+                    {sub.instructionAdjustment && (
+                      <div className="text-xs text-charcoal/60 mt-1">
+                        Note: {sub.instructionAdjustment}
+                      </div>
+                    )}
+                    {sub.allergenInformation && (
+                      <div className="text-xs text-warning mt-1">
+                        ⚠️ {sub.allergenInformation}
+                      </div>
+                    )}
+                    {sub.dietaryNotes && (
+                      <div className="text-xs text-info mt-1">
+                        ℹ️ {sub.dietaryNotes}
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {substitutions.length === 0 && acceptedSubstitutions.length === 0 && (
+                  <p className="text-sm text-charcoal/60">No suitable substitutions available</p>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Instructions */}
           <div className="mb-6">

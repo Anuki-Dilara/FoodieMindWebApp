@@ -15,6 +15,14 @@ const nutritionSchema = new mongoose.Schema({
   isEstimated: { type: Boolean, default: true },
 }, { _id: false });
 
+const preparationSchema = new mongoose.Schema({
+  handsOnTime: { type: Number, default: 15 }, // minutes of active preparation
+  totalSteps: { type: Number, default: 5 },
+  equipment: [{ type: String }], // e.g., ['pan', 'knife', 'blender']
+  method: { type: String, enum: ['stovetop', 'oven', 'microwave', 'no-cook', 'mixed'] },
+  effort: { type: String, enum: ['Very Low', 'Low', 'Medium', 'High', 'Very High'], default: 'Medium' },
+}, { _id: false });
+
 const recipeSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   description: { type: String, default: '' },
@@ -35,6 +43,9 @@ const recipeSchema = new mongoose.Schema({
   dietaryType: [{ type: String }],
   moodTags: [{ type: String }],
   nutrition: nutritionSchema,
+  preparation: preparationSchema,
+  tags: [{ type: String }], // e.g., ['comfort', 'warm', 'mild', 'soft-food']
+  ingredientCategories: [{ type: String }], // e.g., ['protein', 'vegetables', 'grains']
   image: { type: String, default: '' },
   source: {
     type: String,
