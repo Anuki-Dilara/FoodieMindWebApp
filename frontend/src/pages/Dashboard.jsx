@@ -17,13 +17,17 @@ const COLORS = ['#8DD9C4', '#FF6B6B', '#FFE082'];
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [cookRecipe, setCookRecipe] = useState(null);
 
   const fetchDashboard = async () => {
     try {
+      setError(null);
       const res = await API.get('/dashboard');
       setData(res.data);
     } catch (e) {
+      console.error('Dashboard fetch error:', e);
+      setError(e.response?.data?.message || 'Failed to load dashboard');
       toast.error('Failed to load dashboard');
     } finally {
       setLoading(false);
@@ -43,7 +47,28 @@ export default function Dashboard() {
   };
 
   if (loading) return <LoadingSpinner fullScreen />;
-  if (!data) return null;
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
+        <div className="text-6xl">⚠️</div>
+        <h2 className="text-xl font-bold text-charcoal">Dashboard Error</h2>
+        <p className="text-charcoal/60 text-center max-w-md">{error}</p>
+        <CuteButton variant="primary" onClick={fetchDashboard}>Retry</CuteButton>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
+        <div className="text-6xl">📭</div>
+        <h2 className="text-xl font-bold text-charcoal">No Data Available</h2>
+        <p className="text-charcoal/60">Please check your connection and try again.</p>
+        <CuteButton variant="primary" onClick={fetchDashboard}>Retry</CuteButton>
+      </div>
+    );
+  }
 
   const { summary, soonUse, topRecommendations, latestNotifications, welcomeMessage, wasteChart } = data;
 

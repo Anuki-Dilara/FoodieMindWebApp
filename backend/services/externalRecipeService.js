@@ -127,7 +127,13 @@ async function fetchRecipesFromSpoonacular(inventoryItems, selectedMood, userPre
 
 async function fetchRecipesFromTheMealDB(inventoryItems) {
   try {
-    const searchTerms = inventoryItems.slice(0, 3).map((i) => normalizeIngredientName(i.name));
+    const searchTerms = inventoryItems.slice(0, 3).map((i) => {
+      if (typeof i.name !== 'string') {
+        console.error('Inventory item name is not a string:', i);
+        return null;
+      }
+      return normalizeIngredientName(i.name);
+    }).filter(Boolean);
     const recipes = [];
     const seen = new Set();
 

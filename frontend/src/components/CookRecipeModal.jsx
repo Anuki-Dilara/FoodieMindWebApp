@@ -133,17 +133,25 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
               {recipe.ingredients?.map((ing, i) => {
                 const { status, color, icon } = getIngredientStatus(ing);
                 const availability = ingredientAvailability.find(a => a.name === ing.name);
-                
+
                 // Build conversion display
                 let conversionDisplay = null;
+                let requiredDisplay = `${ing.quantity} ${ing.unit}`;
+
+                if (availability && availability.requiredInOriginalUnit) {
+                  const req = availability.requiredInOriginalUnit;
+                  requiredDisplay = `${ing.quantity} ${ing.unit} ≈ ${req.quantity} ${req.unit}`;
+                }
+
                 if (availability && availability.conversionInfo && availability.conversionInfo.isEstimate) {
+                  const conv = availability.conversionInfo;
                   conversionDisplay = (
                     <div className="text-xs text-charcoal/50 italic">
-                      {availability.conversionInfo.originalUnit} ≈ {availability.conversionInfo.convertedUnit} (estimated)
+                      {conv.originalQuantity} {conv.originalUnit} ≈ {conv.convertedQuantity} {conv.convertedUnit} (estimated)
                     </div>
                   );
                 }
-                
+
                 return (
                   <div key={i} className="flex justify-between items-start py-2 border-b border-primary/10 last:border-0">
                     <div className="flex items-center gap-2">
@@ -151,7 +159,7 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
                       <span className="text-sm">{ing.name}</span>
                     </div>
                     <div className="text-right">
-                      <div className="text-sm font-medium">Required: {ing.quantity} {ing.unit}</div>
+                      <div className="text-sm font-medium">Required: {requiredDisplay}</div>
                       {availability && (
                         <>
                           <div className="text-xs text-charcoal/60">

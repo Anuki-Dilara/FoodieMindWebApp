@@ -19,6 +19,12 @@ const MOOD_DIFFICULTY = {
 };
 
 function ingredientMatchesInventory(ingredientName, inventoryItems) {
+  // Validate ingredient name is a string
+  if (typeof ingredientName !== 'string') {
+    console.error('ingredientMatchesInventory received non-string ingredient name:', ingredientName);
+    return false;
+  }
+  
   const normalized = normalizeIngredientName(ingredientName);
   return inventoryItems.find((item) => {
     const itemName = normalizeIngredientName(item.name);
@@ -27,6 +33,12 @@ function ingredientMatchesInventory(ingredientName, inventoryItems) {
 }
 
 function ingredientExactMatch(ingredientName, targetName) {
+  // Validate both inputs are strings
+  if (typeof ingredientName !== 'string' || typeof targetName !== 'string') {
+    console.error('ingredientExactMatch received non-string input:', { ingredientName, targetName });
+    return false;
+  }
+  
   const normalized1 = normalizeIngredientName(ingredientName);
   const normalized2 = normalizeIngredientName(targetName);
   return normalized1 === normalized2;

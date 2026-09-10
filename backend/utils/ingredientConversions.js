@@ -122,6 +122,30 @@ const INGREDIENT_CONVERSIONS = {
     isEstimate: true,
     preparation: 'ground'
   },
+  'black pepper': {
+    gramsPerTablespoon: 7.5, // ~2.5g per teaspoon (McCormick: 1/4 tsp = 0.7g)
+    source: 'McCormick product label (https://www.mccormick.com/products/mccormick-r-pure-ground-black-pepper-3-oz)',
+    isEstimate: true,
+    preparation: 'ground'
+  },
+  'ground black pepper': {
+    gramsPerTablespoon: 7.5,
+    source: 'McCormick product label (https://www.mccormick.com/products/mccormick-r-pure-ground-black-pepper-3-oz)',
+    isEstimate: true,
+    preparation: 'ground'
+  },
+  'black pepper powder': {
+    gramsPerTablespoon: 7.5,
+    source: 'McCormick product label (https://www.mccormick.com/products/mccormick-r-pure-ground-black-pepper-3-oz)',
+    isEstimate: true,
+    preparation: 'ground'
+  },
+  'pepper': {
+    gramsPerTablespoon: 7.5, // Default to ground black pepper
+    source: 'McCormick product label (https://www.mccormick.com/products/mccormick-r-pure-ground-black-pepper-3-oz)',
+    isEstimate: true,
+    preparation: 'ground (default)'
+  },
   'curry powder': {
     gramsPerTablespoon: 8,
     source: 'Standard culinary reference',
@@ -169,20 +193,50 @@ const INGREDIENT_CONVERSIONS = {
 };
 
 function getIngredientConversionProfile(ingredientName) {
+  // Validate input type
+  if (typeof ingredientName !== 'string') {
+    throw new Error(`getIngredientConversionProfile expects a string, got ${typeof ingredientName}`);
+  }
+
+  if (!ingredientName) {
+    throw new Error('getIngredientConversionProfile received empty string');
+  }
+
   const normalized = ingredientName.toLowerCase().trim();
-  
+
   // Check for exact match first
   if (INGREDIENT_CONVERSIONS[normalized]) {
     return INGREDIENT_CONVERSIONS[normalized];
   }
-  
-  // Check for partial matches (e.g., "ground cinnamon" matches "cinnamon")
+
+  // Check for partial matches (e.g., "ground black pepper" matches "black pepper")
+  // But avoid false positives like "white pepper" matching "pepper"
   for (const [key, profile] of Object.entries(INGREDIENT_CONVERSIONS)) {
-    if (normalized.includes(key) || key.includes(normalized)) {
-      return profile;
+    // If ingredient name contains the key (e.g., "ground black pepper" contains "black pepper")
+    if (normalized.includes(key)) {
+      // Check for conflicting modifiers that should NOT match
+      const conflictingModifiers = ['white', 'bell', 'cayenne', 'chilli', 'chili'];
+      const hasConflict = conflictingModifiers.some(modifier =>
+        normalized.includes(modifier) && !key.includes(modifier)
+      );
+      if (!hasConflict) {
+        return profile;
+      }
+    }
+    // If key contains ingredient name (e.g., "black pepper" contains "pepper")
+    if (key.includes(normalized)) {
+      // Only match if the key is a direct extension (e.g., "black pepper" for "pepper")
+      // but not if ingredient is a specific variant (e.g., "white pepper" for "pepper")
+      const conflictingModifiers = ['white', 'bell', 'cayenne', 'chilli', 'chili'];
+      const hasConflict = conflictingModifiers.some(modifier =>
+        normalized.includes(modifier) && !key.includes(modifier)
+      );
+      if (!hasConflict) {
+        return profile;
+      }
     }
   }
-  
+
   return null; // No conversion profile available
 }
 

@@ -129,6 +129,15 @@ function formatQuantity(quantity, unit) {
 }
 
 function normalizeIngredientName(name) {
+  // Validate input type
+  if (typeof name !== 'string') {
+    throw new Error(`normalizeIngredientName expects a string, got ${typeof name}`);
+  }
+  
+  if (!name) {
+    throw new Error('normalizeIngredientName received empty string');
+  }
+  
   // Common preparation words to strip
   const preparationWords = [
     'sliced', 'chopped', 'diced', 'minced', 'crushed', 'grated', 'peeled',

@@ -192,21 +192,47 @@ router.get('/:id/ingredient-check', async (req, res) => {
       // Compare with required amount
       const hasEnough = totalAvailable >= ing.quantity;
       const missing = hasEnough ? 0 : ing.quantity - totalAvailable;
-      
+
       // Calculate what will remain after cooking
       const remaining = hasEnough ? totalAvailable - ing.quantity : 0;
+
+      // Build conversion display info for frontend
+      let conversionDisplay = null;
+      let requiredInOriginalUnit = null;
+      if (conversionInfo && conversionInfo.isEstimate) {
+        // Show original unit equivalent if it's a mass-volume conversion
+        const originalItem = effectiveUsableItems[0];
+        if (originalItem && originalItem.unit !== ing.unit) {
+          const conversion = convertQuantity(ing.quantity, ing.unit, originalItem.unit, ing.name);
+          if (conversion.success) {
+            requiredInOriginalUnit = {
+              quantity: Math.round(conversion.quantity * 1000) / 1000,
+              unit: originalItem.unit
+            };
+            conversionDisplay = {
+              isEstimate: true,
+              source: conversionInfo.source,
+              originalQuantity: originalItem.quantity,
+              originalUnit: originalItem.unit,
+              convertedQuantity: Math.round(totalAvailable * 100) / 100,
+              convertedUnit: ing.unit
+            };
+          }
+        }
+      }
 
       ingredientCheck.push({
         name: ing.name,
         required: ing.quantity,
         unit: ing.unit,
+        requiredInOriginalUnit,
         available: Math.round(totalAvailable * 100) / 100,
         unitAvailable: ing.unit,
         hasEnough,
         status: hasEnough ? 'available' : 'insufficient',
         missing: Math.round(missing * 100) / 100,
         remaining: Math.round(remaining * 100) / 100,
-        conversionInfo,
+        conversionInfo: conversionDisplay,
         missingInfo: null
       });
     }

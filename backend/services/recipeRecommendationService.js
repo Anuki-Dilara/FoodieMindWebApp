@@ -37,6 +37,12 @@ function normalizeDifficulty(difficulty) {
 }
 
 function ingredientMatchesInventory(ingredientName, inventoryItems) {
+  // Validate ingredient name is a string
+  if (typeof ingredientName !== 'string') {
+    console.error('ingredientMatchesInventory received non-string ingredient name:', ingredientName);
+    return false;
+  }
+  
   const normalized = normalizeIngredientName(ingredientName);
   return inventoryItems.find((item) => {
     const itemName = normalizeIngredientName(item.name);
