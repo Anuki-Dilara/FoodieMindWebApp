@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import API from '../utils/api';
 import RecipeCard from '../components/RecipeCard';
@@ -12,13 +12,19 @@ export default function Recipes() {
   const [loading, setLoading] = useState(true);
   const [cookRecipe, setCookRecipe] = useState(null);
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const ingredient = searchParams.get('ingredient');
 
   useEffect(() => {
-    API.get('/recipes/recommendations')
+    setLoading(true);
+    setRecommendations([]);
+    
+    const params = ingredient ? { ingredient } : {};
+    API.get('/recipes/recommendations', { params })
       .then((res) => setRecommendations(res.data.recommendations))
       .catch(() => toast.error('Failed to load recipes'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [ingredient]);
 
   const handleCook = async (recipe) => {
     try {
@@ -34,18 +40,41 @@ export default function Recipes() {
     toast.success('Go to Meal Planner to schedule this recipe!');
   };
 
+  const handleClearFilter = () => {
+    setSearchParams({});
+  };
+
   return (
     <div className="animate-fade-in">
-      <h1 className="text-2xl font-bold text-charcoal mb-2">👨‍🍳 AI Recipe Recommendations</h1>
+      <div className="flex items-center justify-between mb-2">
+        <h1 className="text-2xl font-bold text-charcoal">
+          {ingredient ? `Recipes using ${ingredient}` : '👨‍🍳 AI Recipe Recommendations'}
+        </h1>
+        {ingredient && (
+          <button
+            onClick={handleClearFilter}
+            className="text-sm text-primary hover:text-primary/80 underline"
+          >
+            Show all recommendations
+          </button>
+        )}
+      </div>
       <p className="text-charcoal/60 mb-6">
-        Recipes matched to your pantry ingredients, preferences, and expiring items
+        {ingredient
+          ? `Recipes containing ${ingredient} that match your preferences`
+          : 'Recipes matched to your pantry ingredients, preferences, and expiring items'
+        }
       </p>
 
       {loading ? <LoadingSpinner /> : recommendations.length === 0 ? (
         <EmptyState
           emoji="🍳"
-          title="No recipes found yet"
-          message="Add items to your pantry and set your dietary preferences to get personalized recommendations!"
+          title={ingredient ? `No recipes found containing ${ingredient}` : 'No recipes found yet'}
+          message={
+            ingredient
+              ? `No recipes found containing ${ingredient} that match your preferences.`
+              : 'Add items to your pantry and set your dietary preferences to get personalized recommendations!'
+          }
         />
       ) : (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">

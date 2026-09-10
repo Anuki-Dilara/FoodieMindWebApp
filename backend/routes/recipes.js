@@ -33,7 +33,7 @@ router.post('/', async (req, res) => {
 
 router.get('/recommendations', async (req, res) => {
   try {
-    const { mood } = req.query;
+    const { mood, ingredient } = req.query;
     const inventory = await FoodItem.find({ userId: req.userId });
     let recipes = await Recipe.find();
 
@@ -59,7 +59,7 @@ router.get('/recommendations', async (req, res) => {
       }
     }
 
-    const recommendations = recommendRecipes(recipes, inventory, req.user, mood || null);
+    const recommendations = recommendRecipes(recipes, inventory, req.user, mood || null, ingredient || null);
     res.json({ recommendations, source: 'rule-based' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to get recommendations.', error: error.message });

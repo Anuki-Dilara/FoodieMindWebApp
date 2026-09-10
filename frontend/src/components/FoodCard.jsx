@@ -39,7 +39,7 @@ export default function FoodCard({ item, onEdit, onConsume, onDelete, showAction
           <CuteButton variant="outline" className="!px-3 !py-1.5 text-sm" onClick={() => onEdit?.(item)}>Edit</CuteButton>
           <CuteButton variant="primary" className="!px-3 !py-1.5 text-sm" onClick={() => onConsume?.(item)}>Mark Consumed</CuteButton>
           {item.status !== 'Fresh' && (
-            <Link to="/recipes">
+            <Link to={`/recipes?ingredient=${encodeURIComponent(item.name)}`}>
               <CuteButton variant="secondary" className="!px-3 !py-1.5 text-sm">Suggest Recipe</CuteButton>
             </Link>
           )}

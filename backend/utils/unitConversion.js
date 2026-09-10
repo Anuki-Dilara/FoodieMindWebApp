@@ -76,7 +76,28 @@ function formatQuantity(quantity, unit) {
 }
 
 function normalizeIngredientName(name) {
-  return name.toLowerCase().trim().replace(/s$/, '');
+  // Common preparation words to strip
+  const preparationWords = [
+    'sliced', 'chopped', 'diced', 'minced', 'crushed', 'grated', 'peeled',
+    'cooked', 'raw', 'fresh', 'dried', 'frozen', 'canned', 'ground',
+    'whole', 'halved', 'quartered', 'cubed', 'shredded', 'mashed'
+  ];
+  
+  let normalized = name.toLowerCase().trim();
+  
+  // Remove preparation words
+  preparationWords.forEach(word => {
+    const regex = new RegExp(`\\b${word}\\s*`, 'gi');
+    normalized = normalized.replace(regex, '');
+  });
+  
+  // Remove common plural suffixes
+  normalized = normalized.replace(/(ies)$/i, 'y'); // e.g., berries -> berry
+  normalized = normalized.replace(/(ves)$/i, 'f'); // e.g., tomatoes -> tomato (rough approximation)
+  normalized = normalized.replace(/(es)$/i, '');   // e.g., potatoes -> potato
+  normalized = normalized.replace(/s$/i, '');     // e.g., bananas -> banana
+  
+  return normalized.trim();
 }
 
 module.exports = {

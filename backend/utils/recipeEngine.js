@@ -26,6 +26,12 @@ function ingredientMatchesInventory(ingredientName, inventoryItems) {
   });
 }
 
+function ingredientExactMatch(ingredientName, targetName) {
+  const normalized1 = normalizeIngredientName(ingredientName);
+  const normalized2 = normalizeIngredientName(targetName);
+  return normalized1 === normalized2;
+}
+
 function hasAllergyConflict(recipe, userAllergies) {
   if (!userAllergies || userAllergies.length === 0) return false;
   const allergySet = userAllergies.map((a) => a.toLowerCase());
@@ -120,8 +126,16 @@ function buildResult(recipe, matched, missing, matchPercentage, score) {
   };
 }
 
-function recommendRecipes(recipes, inventoryItems, user, mood = null, limit = 20) {
-  const scored = recipes
+function recommendRecipes(recipes, inventoryItems, user, mood = null, requiredIngredient = null, limit = 20) {
+  // First filter by required ingredient if specified
+  let filteredRecipes = recipes;
+  if (requiredIngredient) {
+    filteredRecipes = recipes.filter((recipe) => {
+      return recipe.ingredients.some((ing) => ingredientExactMatch(ing.name, requiredIngredient));
+    });
+  }
+
+  const scored = filteredRecipes
     .map((recipe) => scoreRecipe(recipe, inventoryItems, user, mood))
     .filter((r) => r && r.score >= 0 && r.matchPercentage > 0)
     .sort((a, b) => b.score - a.score || b.matchPercentage - a.matchPercentage);
@@ -133,6 +147,7 @@ module.exports = {
   recommendRecipes,
   scoreRecipe,
   ingredientMatchesInventory,
+  ingredientExactMatch,
   hasAllergyConflict,
   MOOD_KEYWORDS,
 };
