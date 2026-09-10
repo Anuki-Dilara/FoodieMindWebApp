@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-cream text-charcoal font-sans antialiased;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-2xl shadow-card p-6 transition-all duration-300 hover:shadow-soft;
+  }
+  .btn-primary {
+    @apply bg-primary hover:bg-primary/90 text-charcoal font-semibold px-6 py-2.5 rounded-xl transition-all duration-200 hover:scale-105 active:scale-95;
+  }
+  .btn-secondary {
+    @apply bg-secondary hover:bg-secondary/90 text-charcoal font-semibold px-6 py-2.5 rounded-xl transition-all duration-200 hover:scale-105 active:scale-95;
+  }
+  .btn-outline {
+    @apply border-2 border-primary text-charcoal font-semibold px-6 py-2.5 rounded-xl transition-all duration-200 hover:bg-primary/20;
+  }
+  .input-field {
+    @apply w-full px-4 py-3 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all;
+  }
+  .badge-fresh {
+    @apply bg-success/20 text-success px-3 py-1 rounded-full text-xs font-semibold;
+  }
+  .badge-soon {
+    @apply bg-warning/20 text-warning px-3 py-1 rounded-full text-xs font-semibold;
+  }
+  .badge-expired {
+    @apply bg-danger/20 text-danger px-3 py-1 rounded-full text-xs font-semibold;
+  }
+}
+
+/* Cute animations */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fadeIn 0.4s ease-out;
+}
