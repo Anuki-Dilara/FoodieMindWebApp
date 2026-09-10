@@ -6,8 +6,9 @@ const CookedRecipe = require('../models/CookedRecipe');
 const ShoppingListItem = require('../models/ShoppingListItem');
 const ConsumptionRecord = require('../models/ConsumptionRecord');
 const { auth } = require('../middleware/auth');
-const { recommendRecipes, ingredientMatchesInventory } = require('../utils/recipeEngine');
-const { deductQuantity, convertToBase } = require('../utils/unitConversion');
+const { recommendRecipes, ingredientMatchesInventory, ingredientExactMatch } = require('../utils/recipeEngine');
+const { deductQuantity, convertToBase, canConvert } = require('../utils/unitConversion');
+const { getExpiryStatus } = require('../utils/expiryHelper');
 
 const router = express.Router();
 
@@ -66,6 +67,87 @@ router.get('/recommendations', async (req, res) => {
   }
 });
 
+router.get('/:id/ingredient-check', async (req, res) => {
+  try {
+    const recipe = await Recipe.findById(req.params.id);
+    if (!recipe) return res.status(404).json({ message: 'Recipe not found.' });
+
+    const inventory = await FoodItem.find({ userId: req.userId });
+    const ingredientCheck = [];
+
+    for (const ing of recipe.ingredients) {
+      const invItem = inventory.find((item) => ingredientExactMatch(ing.name, item.name));
+      
+      if (!invItem) {
+        ingredientCheck.push({
+          name: ing.name,
+          required: ing.quantity,
+          unit: ing.unit,
+          available: 0,
+          unitAvailable: '',
+          hasEnough: false,
+          status: 'missing'
+        });
+      } else {
+        // Check if item is expired
+        const { status } = getExpiryStatus(invItem.expiryDate);
+        if (status === 'Expired') {
+          ingredientCheck.push({
+            name: ing.name,
+            required: ing.quantity,
+            unit: ing.unit,
+            available: 0,
+            unitAvailable: invItem.unit,
+            hasEnough: false,
+            status: 'expired'
+          });
+        } else {
+          // Check quantity compatibility
+          try {
+            if (canConvert(invItem.unit, ing.unit)) {
+              const result = deductQuantity(invItem.quantity, invItem.unit, ing.quantity, ing.unit);
+              ingredientCheck.push({
+                name: ing.name,
+                required: ing.quantity,
+                unit: ing.unit,
+                available: invItem.quantity,
+                unitAvailable: invItem.unit,
+                hasEnough: !result.isEmpty,
+                status: result.isEmpty ? 'insufficient' : 'available'
+              });
+            } else {
+              // Incompatible units
+              ingredientCheck.push({
+                name: ing.name,
+                required: ing.quantity,
+                unit: ing.unit,
+                available: invItem.quantity,
+                unitAvailable: invItem.unit,
+                hasEnough: false,
+                status: 'incompatible'
+              });
+            }
+          } catch (error) {
+            ingredientCheck.push({
+              name: ing.name,
+              required: ing.quantity,
+              unit: ing.unit,
+              available: invItem.quantity,
+              unitAvailable: invItem.unit,
+              hasEnough: false,
+              status: 'error'
+            });
+          }
+        }
+      }
+    }
+
+    res.json({ ingredients: ingredientCheck });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to check ingredients.', error: error.message });
+  }
+});
+
 router.post('/:id/cooked', async (req, res) => {
   try {
     const recipe = await Recipe.findById(req.params.id);
@@ -76,8 +158,50 @@ router.post('/:id/cooked', async (req, res) => {
     const addedToShoppingList = [];
 
     for (const ing of recipe.ingredients) {
-      const invItem = inventory.find((item) => ingredientMatchesInventory(ing.name, [item]));
-      if (!invItem) continue;
+      const invItem = inventory.find((item) => ingredientExactMatch(ing.name, item.name));
+      if (!invItem) {
+        // Add missing ingredient to shopping list
+        const existing = await ShoppingListItem.findOne({
+          userId: req.userId,
+          name: { $regex: new RegExp(`^${ing.name}$`, 'i') },
+          status: 'Pending',
+        });
+        if (!existing) {
+          await ShoppingListItem.create({
+            userId: req.userId,
+            name: ing.name,
+            quantity: ing.quantity,
+            unit: ing.unit,
+            source: 'recipe',
+            priority: 'Medium',
+          });
+          addedToShoppingList.push(ing.name);
+        }
+        continue;
+      }
+
+      // Check if item is expired
+      const { status } = getExpiryStatus(invItem.expiryDate);
+      if (status === 'Expired') {
+        // Add expired item to shopping list
+        const existing = await ShoppingListItem.findOne({
+          userId: req.userId,
+          name: { $regex: new RegExp(`^${ing.name}$`, 'i') },
+          status: 'Pending',
+        });
+        if (!existing) {
+          await ShoppingListItem.create({
+            userId: req.userId,
+            name: ing.name,
+            quantity: ing.quantity,
+            unit: ing.unit,
+            source: 'recipe',
+            priority: 'Medium',
+          });
+          addedToShoppingList.push(ing.name);
+        }
+        continue;
+      }
 
       try {
         const result = deductQuantity(invItem.quantity, invItem.unit, ing.quantity, ing.unit);
@@ -121,7 +245,23 @@ router.post('/:id/cooked', async (req, res) => {
           await invItem.save();
         }
       } catch (e) {
-        // Skip incompatible units
+        // Add incompatible unit items to shopping list
+        const existing = await ShoppingListItem.findOne({
+          userId: req.userId,
+          name: { $regex: new RegExp(`^${ing.name}$`, 'i') },
+          status: 'Pending',
+        });
+        if (!existing) {
+          await ShoppingListItem.create({
+            userId: req.userId,
+            name: ing.name,
+            quantity: ing.quantity,
+            unit: ing.unit,
+            source: 'recipe',
+            priority: 'Medium',
+          });
+          addedToShoppingList.push(ing.name);
+        }
       }
     }
 

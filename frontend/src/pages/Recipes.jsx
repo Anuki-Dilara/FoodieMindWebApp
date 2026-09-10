@@ -30,8 +30,13 @@ export default function Recipes() {
     try {
       const res = await API.post(`/recipes/${recipe._id}/cooked`);
       toast.success(res.data.message);
+      // Refresh recommendations to update ingredient availability
+      const params = ingredient ? { ingredient } : {};
+      const newRes = await API.get('/recipes/recommendations', { params });
+      setRecommendations(newRes.data.recommendations);
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to cook recipe');
+      throw e; // Re-throw to keep modal open
     }
   };
 

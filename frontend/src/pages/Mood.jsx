@@ -32,8 +32,14 @@ export default function Mood() {
     try {
       const res = await API.post(`/recipes/${recipe._id}/cooked`);
       toast.success(res.data.message);
+      // Refresh recommendations to update ingredient availability
+      if (selectedMood) {
+        const moodRes = await API.post('/mood/recommendations', { mood: selectedMood });
+        setRecommendations(moodRes.data.recommendations);
+      }
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to cook recipe');
+      throw e; // Re-throw to keep modal open
     }
   };
 

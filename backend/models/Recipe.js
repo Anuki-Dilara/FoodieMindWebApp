@@ -6,12 +6,26 @@ const ingredientSchema = new mongoose.Schema({
   unit: { type: String, default: 'pieces' },
 }, { _id: false });
 
+const nutritionSchema = new mongoose.Schema({
+  calories: { type: Number, default: 0 },
+  protein: { type: Number, default: 0 },
+  carbohydrates: { type: Number, default: 0 },
+  fat: { type: Number, default: 0 },
+  isEstimated: { type: Boolean, default: true },
+}, { _id: false });
+
 const recipeSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   description: { type: String, default: '' },
   ingredients: [ingredientSchema],
   instructions: [{ type: String }],
   cookingTime: { type: Number, default: 30 },
+  servings: { type: Number, default: 2 },
+  mealType: {
+    type: String,
+    enum: ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Drink'],
+    default: 'Dinner',
+  },
   difficulty: {
     type: String,
     enum: ['Easy', 'Medium', 'Hard', 'Beginner', 'Intermediate', 'Advanced'],
@@ -19,6 +33,7 @@ const recipeSchema = new mongoose.Schema({
   },
   dietaryType: [{ type: String }],
   moodTags: [{ type: String }],
+  nutrition: nutritionSchema,
   image: { type: String, default: '' },
   source: {
     type: String,
@@ -35,6 +50,7 @@ const recipeSchema = new mongoose.Schema({
 recipeSchema.index({ name: 'text', description: 'text' });
 recipeSchema.index({ source: 1 });
 recipeSchema.index({ difficulty: 1 });
+recipeSchema.index({ mealType: 1 });
 
 recipeSchema.pre('save', function (next) {
   this.updatedAt = Date.now();

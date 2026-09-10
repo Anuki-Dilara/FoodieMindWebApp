@@ -1,46 +1,204 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import CuteButton from './CuteButton';
+import API from '../utils/api';
 
 export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) {
   const [loading, setLoading] = useState(false);
+  const [ingredientAvailability, setIngredientAvailability] = useState([]);
 
-  if (!isOpen || !recipe) return null;
+  useEffect(() => {
+    if (isOpen && recipe) {
+      fetchIngredientAvailability();
+    }
+  }, [isOpen, recipe]);
+
+  const fetchIngredientAvailability = async () => {
+    try {
+      const res = await API.get(`/recipes/${recipe._id}/ingredient-check`);
+      setIngredientAvailability(res.data.ingredients || []);
+    } catch (error) {
+      console.error('Failed to check ingredient availability:', error);
+      setIngredientAvailability([]);
+    }
+  };
 
   const handleCook = async () => {
     setLoading(true);
     try {
       await onConfirm(recipe);
       onClose();
+    } catch (error) {
+      // Keep modal open on error
     } finally {
       setLoading(false);
     }
   };
 
+  const getIngredientStatus = (ing) => {
+    const availability = ingredientAvailability.find(a => a.name === ing.name);
+    if (!availability) return { status: 'missing', color: 'text-danger', icon: '❌' };
+    if (availability.hasEnough) return { status: 'available', color: 'text-success', icon: '✅' };
+    return { status: 'insufficient', color: 'text-warning', icon: '⚠️' };
+  };
+
+  if (!isOpen || !recipe) return null;
+
   return (
     <div className="fixed inset-0 bg-charcoal/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-soft max-w-md w-full animate-fade-in p-6">
-        <h2 className="text-xl font-bold text-charcoal mb-1">👨‍🍳 Cook {recipe.name}?</h2>
-        <p className="text-sm text-charcoal/60 mb-4">This will deduct ingredients from your pantry.</p>
-
-        <div className="bg-cream rounded-xl p-4 mb-4 max-h-48 overflow-y-auto">
-          <p className="text-sm font-semibold mb-2">Required ingredients:</p>
-          {recipe.ingredients?.map((ing, i) => (
-            <div key={i} className="flex justify-between text-sm py-1 border-b border-primary/10 last:border-0">
-              <span>{ing.name}</span>
-              <span className="text-charcoal/60">{ing.quantity} {ing.unit}</span>
+      <div className="bg-white rounded-2xl shadow-soft max-w-2xl w-full animate-fade-in max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="p-6 border-b border-primary/10">
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              <h2 className="text-xl font-bold text-charcoal mb-1">👨‍🍳 Cook {recipe.name}?</h2>
+              <div className="flex items-center gap-4 text-sm text-charcoal/60">
+                <span>⏱ {recipe.cookingTime} min</span>
+                <span>🍽 {recipe.servings} servings</span>
+              </div>
             </div>
-          ))}
+            <button
+              onClick={onClose}
+              className="text-charcoal/40 hover:text-charcoal transition-colors p-1"
+              disabled={loading}
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
 
-        <p className="text-xs text-charcoal/50 mb-4">
-          Items that run out will be automatically added to your shopping list.
-        </p>
+        {/* Scrollable Content */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {/* Recipe Image */}
+          <div className="mb-6">
+            {recipe.image ? (
+              <img
+                src={recipe.image}
+                alt={recipe.name}
+                className="w-full h-48 object-cover rounded-xl"
+                onError={(e) => {
+                  e.target.style.display = 'none';
+                  e.target.nextElementSibling.style.display = 'flex';
+                }}
+              />
+            ) : null}
+            <div className="w-full h-48 bg-gradient-to-br from-primary/30 to-secondary/30 rounded-xl flex items-center justify-center">
+              <span className="text-6xl">🍳</span>
+            </div>
+          </div>
 
-        <div className="flex gap-3">
-          <CuteButton variant="primary" className="flex-1" onClick={handleCook} disabled={loading}>
-            {loading ? 'Cooking...' : '🎉 Cook this!'}
-          </CuteButton>
-          <CuteButton variant="outline" onClick={onClose}>Cancel</CuteButton>
+          {/* Recipe Meta */}
+          <div className="flex flex-wrap gap-2 mb-4">
+            <span className="text-xs bg-info/20 text-charcoal px-3 py-1 rounded-lg">{recipe.mealType}</span>
+            <span className="text-xs bg-primary/20 text-charcoal px-3 py-1 rounded-lg">{recipe.difficulty}</span>
+            {recipe.dietaryType?.slice(0, 2).map((d) => (
+              <span key={d} className="text-xs bg-secondary/30 text-charcoal px-3 py-1 rounded-lg">{d}</span>
+            ))}
+          </div>
+
+          {/* Description */}
+          <div className="mb-6">
+            <h3 className="font-semibold text-charcoal mb-2">📝 Description</h3>
+            <p className="text-sm text-charcoal/70">{recipe.description}</p>
+          </div>
+
+          {/* Ingredients */}
+          <div className="mb-6">
+            <h3 className="font-semibold text-charcoal mb-3">🥣 Ingredients</h3>
+            <div className="bg-cream rounded-xl p-4 space-y-2">
+              {recipe.ingredients?.map((ing, i) => {
+                const { status, color, icon } = getIngredientStatus(ing);
+                const availability = ingredientAvailability.find(a => a.name === ing.name);
+                
+                return (
+                  <div key={i} className="flex justify-between items-start py-2 border-b border-primary/10 last:border-0">
+                    <div className="flex items-center gap-2">
+                      <span className={color}>{icon}</span>
+                      <span className="text-sm">{ing.name}</span>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm font-medium">{ing.quantity} {ing.unit}</div>
+                      {status === 'insufficient' && availability && (
+                        <div className="text-xs text-warning">
+                          Have: {availability.available} {availability.unit} • Need: {ing.quantity} {ing.unit}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Instructions */}
+          <div className="mb-6">
+            <h3 className="font-semibold text-charcoal mb-3">👩‍🍳 Cooking Instructions</h3>
+            <div className="bg-cream rounded-xl p-4 space-y-3">
+              {recipe.instructions?.map((step, i) => (
+                <div key={i} className="flex gap-3">
+                  <span className="flex-shrink-0 w-6 h-6 bg-primary text-white rounded-full flex items-center justify-center text-xs font-bold">
+                    {i + 1}
+                  </span>
+                  <p className="text-sm text-charcoal/80 leading-relaxed">{step}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Nutrition */}
+          {recipe.nutrition && (
+            <div className="mb-6">
+              <h3 className="font-semibold text-charcoal mb-3">💡 Estimated Nutrition — Per Serving</h3>
+              <div className="bg-cream rounded-xl p-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <div className="text-xs text-charcoal/50">Calories</div>
+                    <div className="font-semibold text-charcoal">{recipe.nutrition.calories} kcal</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-charcoal/50">Protein</div>
+                    <div className="font-semibold text-charcoal">{recipe.nutrition.protein} g</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-charcoal/50">Carbohydrates</div>
+                    <div className="font-semibold text-charcoal">{recipe.nutrition.carbohydrates} g</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-charcoal/50">Fat</div>
+                    <div className="font-semibold text-charcoal">{recipe.nutrition.fat} g</div>
+                  </div>
+                </div>
+                {recipe.nutrition.isEstimated && (
+                  <p className="text-xs text-charcoal/50 mt-3 italic">* Nutritional values are estimates</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Notice */}
+          <div className="bg-info/10 border border-info/20 rounded-xl p-4 mb-4">
+            <p className="text-sm text-charcoal/70">
+              <span className="font-semibold">Cooking notice:</span> Confirming cooking will deduct available ingredients used. Missing quantities will be added to your Shopping List.
+            </p>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="p-6 border-t border-primary/10">
+          <div className="flex gap-3">
+            <CuteButton
+              variant="primary"
+              className="flex-1"
+              onClick={handleCook}
+              disabled={loading}
+            >
+              {loading ? 'Cooking...' : '🎉 Confirm Cooking'}
+            </CuteButton>
+            <CuteButton variant="outline" onClick={onClose} disabled={loading}>
+              Cancel
+            </CuteButton>
+          </div>
         </div>
       </div>
     </div>
