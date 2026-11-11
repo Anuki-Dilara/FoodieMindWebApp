@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import CuteButton from './CuteButton';
+import API from '../utils/api';
 import { CATEGORIES, UNITS } from '../utils/helpers';
 
 const emptyForm = {
@@ -7,11 +8,50 @@ const emptyForm = {
   purchaseDate: new Date().toISOString().split('T')[0],
   expiryDate: '', storageLocation: 'Pantry', price: '', notes: '',
   packageContent: { quantity: '', unit: 'pieces' },
+  slicesPerLoaf: '',
+  slicePack: { weightGrams: '', slices: '' },
+  slicePackSupported: false,
 };
 
 export default function AddFoodModal({ isOpen, onClose, onSave, editItem }) {
   const [form, setForm] = useState(emptyForm);
   const [errors, setErrors] = useState({});
+  const [unitOptions, setUnitOptions] = useState(UNITS);
+  const [preferredUnit, setPreferredUnit] = useState(null);
+
+  // Suggest ingredient-appropriate units from the produce conversion profile.
+  useEffect(() => {
+    const name = form.name.trim();
+    if (!isOpen || name.length < 2) {
+      setUnitOptions(UNITS);
+      setPreferredUnit(null);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const { data } = await API.get('/inventory/units/for-ingredient', { params: { name } });
+        if (data?.hasProfile && Array.isArray(data.units) && data.units.length) {
+          // Show only the units this ingredient actually supports.
+          const units = data.units.includes(form.unit) ? data.units : [form.unit, ...data.units];
+          setUnitOptions([...new Set(units)]);
+          setPreferredUnit(data.preferredUnit);
+          setForm((f) => ({ ...f, slicePackSupported: !!data.slicePack }));
+          if (data.preferredUnit && !editItem) {
+            setForm((f) => (f.unit === emptyForm.unit || !data.units.includes(f.unit) ? { ...f, unit: data.preferredUnit } : f));
+          }
+        } else {
+          setUnitOptions(UNITS);
+          setPreferredUnit(null);
+          setForm((f) => ({ ...f, slicePackSupported: false }));
+        }
+      } catch {
+        setUnitOptions(UNITS);
+        setPreferredUnit(null);
+        setForm((f) => ({ ...f, slicePackSupported: false }));
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [form.name, isOpen]);
 
   useEffect(() => {
     if (editItem) {
@@ -26,6 +66,12 @@ export default function AddFoodModal({ isOpen, onClose, onSave, editItem }) {
         price: editItem.price || '',
         notes: editItem.notes || '',
         packageContent: editItem.packageContent || { quantity: '', unit: 'pieces' },
+        slicesPerLoaf: editItem.slicesPerLoaf ?? '',
+        slicePack: {
+          weightGrams: editItem.slicePack?.weightGrams ?? '',
+          slices: editItem.slicePack?.slices ?? '',
+        },
+        slicePackSupported: !!editItem.slicePack?.weightGrams,
       });
     } else {
       setForm(emptyForm);
@@ -65,7 +111,24 @@ export default function AddFoodModal({ isOpen, onClose, onSave, editItem }) {
     } else {
       data.packageContent = null;
     }
-    
+
+    // Slices per loaf only applies to bread held in whole loaves.
+    if (form.unit === 'loaf' && form.slicesPerLoaf !== '') {
+      data.slicesPerLoaf = Number(form.slicesPerLoaf);
+    } else {
+      data.slicesPerLoaf = null;
+    }
+
+    // Package slice info for sliced cheese (and similar) — optional override.
+    if (form.slicePackSupported && form.slicePack.weightGrams !== '' && form.slicePack.slices !== '') {
+      data.slicePack = {
+        weightGrams: Number(form.slicePack.weightGrams),
+        slices: Number(form.slicePack.slices),
+      };
+    } else {
+      data.slicePack = null;
+    }
+
     onSave(data);
   };
 
@@ -110,8 +173,9 @@ export default function AddFoodModal({ isOpen, onClose, onSave, editItem }) {
             <div>
               <label className="block text-sm font-semibold mb-1">Unit *</label>
               <select className="input-field" value={form.unit} onChange={set('unit')}>
-                {UNITS.map((u) => <option key={u}>{u}</option>)}
+                {unitOptions.map((u) => <option key={u}>{u}</option>)}
               </select>
+              {preferredUnit && <p className="text-xs text-charcoal/50 mt-1">Suggested: {preferredUnit} (estimated conversions available)</p>}
             </div>
           </div>
 
@@ -142,6 +206,53 @@ export default function AddFoodModal({ isOpen, onClose, onSave, editItem }) {
               </div>
               <p className="col-span-2 text-xs text-charcoal/50">
                 Enter package size to enable accurate recipe availability checking (e.g., 20 slices per bread packet)
+              </p>
+            </div>
+          )}
+
+          {form.unit === 'loaf' && (
+            <div className="bg-cream/50 p-4 rounded-lg">
+              <label className="block text-sm font-semibold mb-1">Slices per Loaf</label>
+              <input
+                type="number"
+                step="1"
+                min="1"
+                className="input-field"
+                value={form.slicesPerLoaf}
+                onChange={set('slicesPerLoaf')}
+                placeholder="e.g., 18"
+              />
+              <p className="text-xs text-charcoal/50 mt-1">
+                Optional — how many slices are in this loaf. Leave empty to use the ingredient's default conversion.
+              </p>
+            </div>
+          )}
+
+          {form.slicePackSupported && (
+            <div className="bg-cream/50 p-4 rounded-lg">
+              <label className="block text-sm font-semibold mb-1">Package Slice Info (optional)</label>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-charcoal/60 mb-1">Net package weight (g)</label>
+                  <input
+                    type="number" step="any" min="1" className="input-field"
+                    value={form.slicePack.weightGrams}
+                    onChange={(e) => setForm({ ...form, slicePack: { ...form.slicePack, weightGrams: e.target.value } })}
+                    placeholder="e.g., 200"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-charcoal/60 mb-1">Slices in package</label>
+                  <input
+                    type="number" step="1" min="1" className="input-field"
+                    value={form.slicePack.slices}
+                    onChange={(e) => setForm({ ...form, slicePack: { ...form.slicePack, slices: e.target.value } })}
+                    placeholder="e.g., 10"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-charcoal/50 mt-1">
+                From the package label — e.g., 200 g pack with 10 slices = 20 g per slice. Overrides the default estimate for this item.
               </p>
             </div>
           )}

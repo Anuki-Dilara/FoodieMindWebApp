@@ -105,9 +105,12 @@ const MEAL_SIZE_CALORIES = {
 
 // Time filter mappings
 const TIME_FILTERS = {
+  '15 minutes': 15,
   '10 minutes': 10,
   '20 minutes': 20,
   '30 minutes': 30,
+  '45 minutes': 45,
+  '60 minutes': 60,
   'Any time': Infinity,
 };
 

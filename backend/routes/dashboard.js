@@ -8,6 +8,7 @@ const MealPlan = require('../models/MealPlan');
 const { auth } = require('../middleware/auth');
 const { getExpiryStatus } = require('../utils/expiryHelper');
 const { recommendRecipes } = require('../utils/recipeEngine');
+const IngredientSubstitution = require('../models/IngredientSubstitution');
 const { runDailyChecks } = require('../utils/notificationService');
 
 const router = express.Router();
@@ -35,7 +36,8 @@ router.get('/', async (req, res) => {
     const expired = enriched.filter((i) => i.status === 'Expired');
     const fresh = enriched.filter((i) => i.status === 'Fresh');
 
-    const recommendations = recommendRecipes(recipes, inventory, req.user, null, 5);
+    const substitutions = await IngredientSubstitution.find({ isActive: true }).lean();
+    const recommendations = recommendRecipes(recipes, inventory, req.user, null, null, 5, substitutions);
 
     let wastedValue = 0;
     expired.forEach((i) => { wastedValue += i.price || 0; });

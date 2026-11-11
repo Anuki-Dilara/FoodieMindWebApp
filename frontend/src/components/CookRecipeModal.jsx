@@ -12,6 +12,12 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
   useEffect(() => {
     if (isOpen && recipe) {
       fetchIngredientAvailability();
+      // Track recipe open event
+      if (recipe._id) {
+        API.post(`/recipes/${recipe._id}/opened`).catch(() => {
+          // Silently fail tracking
+        });
+      }
     }
   }, [isOpen, recipe]);
 
@@ -108,9 +114,9 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
               <h2 className="text-xl font-bold text-charcoal mb-1">👨‍🍳 Cook {recipe.name}?</h2>
               <div className="flex items-center gap-4 text-sm text-charcoal/60">
                 <span>⏱ {recipe.cookingTime} min</span>
-                <span>🍽 {recipe.selectedServings || recipe.servings} servings</span>
-                {recipe.selectedServings && recipe.selectedServings !== recipe.servings && (
-                  <span className="text-accent">(scaled from {recipe.servings})</span>
+                <span>🍽 {recipe.selectedServings || recipe.originalServings || recipe.servings} servings</span>
+                {recipe.originalServings && (recipe.selectedServings || recipe.servings) !== recipe.originalServings && (
+                  <span className="text-accent">(scaled from {recipe.originalServings})</span>
                 )}
               </div>
             </div>
@@ -311,6 +317,10 @@ export default function CookRecipeModal({ isOpen, onClose, recipe, onConfirm }) 
                   <div>
                     <div className="text-xs text-charcoal/50">Fat</div>
                     <div className="font-semibold text-charcoal">{recipe.nutrition.fat} g</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-charcoal/50">Fibre</div>
+                    <div className="font-semibold text-charcoal">{recipe.nutrition.fibre ?? 0} g</div>
                   </div>
                 </div>
                 {recipe.nutrition.isEstimated && (

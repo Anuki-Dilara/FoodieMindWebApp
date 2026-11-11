@@ -1,12 +1,15 @@
 import { Link } from 'react-router-dom';
 import { ExpiryBadge } from './StatusBadge';
 import CuteButton from './CuteButton';
-import { formatDate } from '../utils/helpers';
+import { formatDate, isLowStock } from '../utils/helpers';
 
 const categoryEmojis = {
   Dairy: '🥛', Fruits: '🍎', Vegetables: '🥕', Meat: '🥩', Fish: '🐟',
   Bakery: '🍞', Grains: '🌾', 'Canned food': '🥫', Snacks: '🍿',
   Drinks: '🥤', Spices: '🌶️', Other: '📦',
+  'Grains and Cereals': '🌾', Legumes: '🫘', 'Herbs and Spices': '🌿',
+  'Nuts and Seeds': '🥜', 'Cooking Essentials': '🧂',
+  'Canned and Packaged Foods': '🥫', Protein: '🍗',
 };
 
 export default function FoodCard({ item, onEdit, onConsume, onDelete, showActions = true }) {
@@ -24,11 +27,24 @@ export default function FoodCard({ item, onEdit, onConsume, onDelete, showAction
             <p className="text-sm text-charcoal/60">{item.category}</p>
           </div>
         </div>
-        <ExpiryBadge daysLeft={item.daysLeft} status={item.status} />
+        <div className="flex flex-col items-end gap-1">
+          <ExpiryBadge daysLeft={item.daysLeft} status={item.status} />
+          {isLowStock(item) && item.status !== 'Expired' && (
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-warning/15 text-warning border border-warning/30">
+              Low stock
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 text-sm mb-4">
-        <div><span className="text-charcoal/50">Qty:</span> <strong>{item.quantity} {item.unit}</strong></div>
+        <div>
+          <span className="text-charcoal/50">Qty:</span>{' '}
+          <strong>{item.quantity} {item.unit}</strong>
+          {item.unit === 'loaf' && item.slicesPerLoaf > 0 && (
+            <span className="text-xs text-charcoal/50"> (≈ {Math.round(item.quantity * item.slicesPerLoaf * 10) / 10} slices)</span>
+          )}
+        </div>
         <div><span className="text-charcoal/50">Expires:</span> <strong>{formatDate(item.expiryDate)}</strong></div>
         {item.price > 0 && <div><span className="text-charcoal/50">Price:</span> <strong>LKR {item.price}</strong></div>}
         {item.storageLocation && <div><span className="text-charcoal/50">Storage:</span> <strong>{item.storageLocation}</strong></div>}

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import API from '../utils/api';
-import { CATEGORIES } from '../utils/helpers';
+import { CATEGORIES, isLowStock, formatLKR } from '../utils/helpers';
 import FoodCard from '../components/FoodCard';
 import AddFoodModal from '../components/AddFoodModal';
 import ConsumeFoodModal from '../components/ConsumeFoodModal';
@@ -12,6 +12,7 @@ import CuteButton from '../components/CuteButton';
 
 export default function Inventory() {
   const [items, setItems] = useState([]);
+  const [stats, setStats] = useState({ total: 0, expiringSoon: 0, expired: 0, lowStock: 0, value: 0 });
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
@@ -36,7 +37,22 @@ export default function Inventory() {
     }
   };
 
+  const fetchStats = async () => {
+    try {
+      const res = await API.get('/inventory');
+      const all = res.data.items || [];
+      setStats({
+        total: all.length,
+        expiringSoon: all.filter((i) => i.status === 'Use Soon').length,
+        expired: all.filter((i) => i.status === 'Expired').length,
+        lowStock: all.filter((i) => isLowStock(i)).length,
+        value: all.reduce((sum, i) => sum + (Number(i.price) || 0), 0),
+      });
+    } catch (e) { /* stats are non-critical */ }
+  };
+
   useEffect(() => { fetchItems(); }, [search, category, statusFilter]);
+  useEffect(() => { fetchStats(); }, [search, category, statusFilter]);
 
   const handleSave = async (data) => {
     try {
@@ -50,6 +66,7 @@ export default function Inventory() {
       setShowAdd(false);
       setEditItem(null);
       fetchItems();
+      fetchStats();
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to save item');
     }
@@ -60,6 +77,7 @@ export default function Inventory() {
       const res = await API.post(`/inventory/${consumeItem._id}/consume`, data);
       toast.success(res.data.message);
       fetchItems();
+      fetchStats();
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to consume item');
     }
@@ -71,6 +89,7 @@ export default function Inventory() {
       toast.success('Item removed from pantry');
       setDeleteItem(null);
       fetchItems();
+      fetchStats();
     } catch (e) {
       toast.error('Failed to delete item');
     }
@@ -86,6 +105,29 @@ export default function Inventory() {
         <CuteButton variant="primary" onClick={() => { setEditItem(null); setShowAdd(true); }}>
           + Add Food
         </CuteButton>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+        <div className="card !p-4 text-center">
+          <p className="text-2xl font-bold text-primary">{stats.total}</p>
+          <p className="text-xs text-charcoal/60">Total items</p>
+        </div>
+        <div className="card !p-4 text-center">
+          <p className="text-2xl font-bold text-warning">{stats.expiringSoon}</p>
+          <p className="text-xs text-charcoal/60">Expiring soon</p>
+        </div>
+        <div className="card !p-4 text-center">
+          <p className="text-2xl font-bold text-danger">{stats.expired}</p>
+          <p className="text-xs text-charcoal/60">Expired</p>
+        </div>
+        <div className="card !p-4 text-center">
+          <p className="text-2xl font-bold text-charcoal">{stats.lowStock}</p>
+          <p className="text-xs text-charcoal/60">Low stock</p>
+        </div>
+        <div className="card !p-4 text-center col-span-2 md:col-span-1">
+          <p className="text-2xl font-bold text-charcoal">{formatLKR(stats.value)}</p>
+          <p className="text-xs text-charcoal/60">Pantry value</p>
+        </div>
       </div>
 
       <div className="card mb-6">

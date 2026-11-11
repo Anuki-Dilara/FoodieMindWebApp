@@ -43,11 +43,9 @@ function ingredientMatchesInventory(ingredientName, inventoryItems) {
     return false;
   }
   
-  const normalized = normalizeIngredientName(ingredientName);
-  return inventoryItems.find((item) => {
-    const itemName = normalizeIngredientName(item.name);
-    return itemName === normalized || itemName.includes(normalized) || normalized.includes(itemName);
-  });
+  // Strict canonical-identity matching (no substring/category matches).
+  const { findMatchingItems } = require('../utils/ingredientIdentity');
+  return findMatchingItems(ingredientName, inventoryItems)[0];
 }
 
 function calculateIngredientMatch(recipe, inventoryItems) {

@@ -2,6 +2,7 @@ const express = require('express');
 const Recipe = require('../models/Recipe');
 const FoodItem = require('../models/FoodItem');
 const MoodFeedback = require('../models/MoodFeedback');
+const RecommendationEvent = require('../models/RecommendationEvent');
 const { auth } = require('../middleware/auth');
 const { getMoodRecommendations } = require('../utils/moodRecommendationEngine');
 
@@ -30,9 +31,19 @@ router.post('/recommendations', async (req, res) => {
       filters
     );
 
-    const moodText = moods.length === 1 
+    const moodText = moods.length === 1
       ? moods[0].toLowerCase()
       : `${moods[0].toLowerCase()} + ${moods[1].toLowerCase()}`;
+
+    // Track recommendation event
+    const allRecipeIds = [...recommendations.readyToCook, ...recommendations.needsIngredients].map(r => r._id);
+    await RecommendationEvent.create({
+      userId: req.userId,
+      eventType: 'recommendations_shown',
+      moods,
+      filters,
+      recipeIds: allRecipeIds,
+    });
 
     res.json({
       moods,
@@ -59,6 +70,16 @@ router.post('/feedback', async (req, res) => {
       { helpful, updatedAt: Date.now() },
       { upsert: true, new: true }
     );
+
+    // Track feedback event
+    await RecommendationEvent.create({
+      userId: req.userId,
+      eventType: 'feedback_given',
+      moods: [mood],
+      recipeId,
+      recipeName: feedback.recipeName || '',
+      helpful,
+    });
 
     res.json({
       message: helpful ? 'Thanks for your feedback!' : 'Thanks for letting us know!',

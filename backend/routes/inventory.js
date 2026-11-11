@@ -18,6 +18,30 @@ function enrichFoodItem(item) {
   return { ...item.toObject(), status, daysLeft };
 }
 
+// Suggested measurement units for an ingredient, based on its produce
+// conversion profile (falls back to the generic unit list).
+router.get('/units/for-ingredient', async (req, res) => {
+  try {
+    const { name } = req.query;
+    if (!name) return res.status(400).json({ message: 'Ingredient name is required.' });
+    const produce = require('../utils/produceConversionService');
+    const suggestion = produce.supportedUnitsFor(name);
+    if (suggestion) {
+      return res.json({
+        ingredient: name,
+        hasProfile: true,
+        preferredUnit: suggestion.preferredUnit,
+        units: suggestion.units,
+        estimated: true,
+        slicePack: !!suggestion.profile?.cheese,
+      });
+    }
+    res.json({ ingredient: name, hasProfile: false, preferredUnit: null, units: null });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to resolve units.' });
+  }
+});
+
 router.get('/', async (req, res) => {
   try {
     const { category, status, search } = req.query;
@@ -51,7 +75,7 @@ router.post(
   validate,
   async (req, res) => {
     try {
-      const { name, category, quantity, unit, purchaseDate, expiryDate, storageLocation, price, notes } = req.body;
+      const { name, category, quantity, unit, purchaseDate, expiryDate, storageLocation, price, notes, slicesPerLoaf, slicePack } = req.body;
       const base = convertToBase(quantity, unit);
 
       const { status } = getExpiryStatus(expiryDate);
@@ -70,6 +94,10 @@ router.post(
         price: price || 0,
         notes: notes || '',
         status,
+        slicesPerLoaf: slicesPerLoaf != null && slicesPerLoaf > 0 ? Number(slicesPerLoaf) : null,
+        slicePack: slicePack && Number(slicePack.weightGrams) > 0 && Number(slicePack.slices) > 0
+          ? { weightGrams: Number(slicePack.weightGrams), slices: Number(slicePack.slices) }
+          : { weightGrams: null, slices: null },
       });
 
       if (price > 0) {
@@ -113,6 +141,18 @@ router.put('/:id', async (req, res) => {
       item.unit = req.body.unit;
       item.baseQuantity = base.quantity;
       item.baseUnit = base.baseUnit;
+    }
+
+    if (req.body.slicesPerLoaf !== undefined) {
+      item.slicesPerLoaf = req.body.slicesPerLoaf != null && req.body.slicesPerLoaf > 0
+        ? Number(req.body.slicesPerLoaf) : null;
+    }
+
+    if (req.body.slicePack !== undefined) {
+      const sp = req.body.slicePack;
+      item.slicePack = sp && Number(sp.weightGrams) > 0 && Number(sp.slices) > 0
+        ? { weightGrams: Number(sp.weightGrams), slices: Number(sp.slices) }
+        : { weightGrams: null, slices: null };
     }
 
     item.status = getExpiryStatus(item.expiryDate).status;

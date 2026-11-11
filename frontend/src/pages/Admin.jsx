@@ -4,6 +4,8 @@ import toast from 'react-hot-toast';
 import API from '../utils/api';
 import LoadingSpinner from '../components/LoadingSpinner';
 import CuteButton from '../components/CuteButton';
+import RecipeFormModal from '../components/RecipeFormModal';
+import ProduceConversionsPanel from '../components/ProduceConversionsPanel';
 import { useAuth } from '../context/AuthContext';
 
 export default function Admin() {
@@ -14,6 +16,13 @@ export default function Admin() {
   const [notifications, setNotifications] = useState([]);
   const [tab, setTab] = useState('stats');
   const [loading, setLoading] = useState(true);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingRecipe, setEditingRecipe] = useState(null);
+
+  const loadRecipes = async () => {
+    const r = await API.get('/admin/recipes');
+    setRecipes(r.data.recipes);
+  };
 
   useEffect(() => {
     Promise.all([
@@ -53,6 +62,7 @@ export default function Admin() {
     { id: 'users', label: '👥 Users' },
     { id: 'recipes', label: '👨‍🍳 Recipes' },
     { id: 'notifications', label: '🔔 Notifications' },
+    { id: 'conversions', label: '🥕 Conversions' },
   ];
 
   return (
@@ -121,17 +131,51 @@ export default function Admin() {
         )}
 
         {tab === 'recipes' && (
-          <div className="space-y-3">
-            {recipes.map((r) => (
-              <div key={r._id} className="card flex items-center justify-between">
-                <div>
-                  <p className="font-bold">{r.name}</p>
-                  <p className="text-sm text-charcoal/60">{r.difficulty} · {r.cookingTime} min · {r.ingredients?.length} ingredients</p>
-                </div>
-                <CuteButton variant="danger" className="!py-1 !px-3 text-sm" onClick={() => deleteRecipe(r._id)}>Delete</CuteButton>
-              </div>
-            ))}
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-sm text-charcoal/60">
+                {recipes.filter((r) => (r.completeness?.percent ?? 100) < 90).length} recipe(s) have incomplete mood metadata
+              </p>
+              <CuteButton variant="primary" className="!py-2 !px-4 text-sm" onClick={() => { setEditingRecipe(null); setFormOpen(true); }}>
+                + Add Recipe
+              </CuteButton>
+            </div>
+            <div className="space-y-3">
+              {recipes.map((r) => {
+                const pct = r.completeness?.percent ?? 100;
+                const missing = r.completeness?.missing || [];
+                const badgeColor = pct >= 90 ? 'bg-success/20 text-success' : pct >= 60 ? 'bg-warning/30 text-charcoal' : 'bg-danger/15 text-danger';
+                return (
+                  <div key={r._id} className="card flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-bold">{r.name}</p>
+                        {r.isSeed && <span className="text-xs bg-info/20 text-charcoal px-2 py-0.5 rounded-full">seed</span>}
+                        <span
+                          className={`text-xs font-semibold px-2 py-0.5 rounded-full ${badgeColor}`}
+                          title={missing.length ? `Missing: ${missing.join(', ')}` : 'All mood attributes present'}
+                        >
+                          Metadata {pct}%
+                        </span>
+                      </div>
+                      <p className="text-sm text-charcoal/60">{r.difficulty} · {r.cookingTime} min · {r.ingredients?.length} ingredients</p>
+                      {missing.length > 0 && (
+                        <p className="text-xs text-charcoal/40 mt-1">Missing: {missing.slice(0, 6).join(', ')}{missing.length > 6 ? ` +${missing.length - 6} more` : ''}</p>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <CuteButton variant="outline" className="!py-1 !px-3 text-sm" onClick={() => { setEditingRecipe(r); setFormOpen(true); }}>Edit</CuteButton>
+                      <CuteButton variant="danger" className="!py-1 !px-3 text-sm" onClick={() => deleteRecipe(r._id)}>Delete</CuteButton>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
+        )}
+
+        {tab === 'conversions' && (
+          <ProduceConversionsPanel />
         )}
 
         {tab === 'notifications' && (
@@ -146,6 +190,13 @@ export default function Admin() {
           </div>
         )}
       </div>
+
+      <RecipeFormModal
+        isOpen={formOpen}
+        onClose={() => { setFormOpen(false); setEditingRecipe(null); }}
+        recipe={editingRecipe}
+        onSaved={loadRecipes}
+      />
     </div>
   );
 }

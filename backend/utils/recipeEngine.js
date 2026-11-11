@@ -1,4 +1,6 @@
 const { normalizeIngredientName } = require('./unitConversion');
+const { sameIngredient, findMatchingItems } = require('./ingredientIdentity');
+const { matchIngredientRequirements } = require('./ingredientMatcher');
 
 const MOOD_KEYWORDS = {
   Happy: ['colorful', 'fun', 'smoothie', 'fruit', 'salad'],
@@ -25,11 +27,9 @@ function ingredientMatchesInventory(ingredientName, inventoryItems) {
     return false;
   }
   
-  const normalized = normalizeIngredientName(ingredientName);
-  return inventoryItems.find((item) => {
-    const itemName = normalizeIngredientName(item.name);
-    return itemName === normalized || itemName.includes(normalized) || normalized.includes(itemName);
-  });
+  // Strict canonical-identity matching: "Cooking Oil" must NOT match
+  // "Sesame Oil" or "Olive Oil". Only true aliases/synonyms match.
+  return findMatchingItems(ingredientName, inventoryItems)[0];
 }
 
 function ingredientExactMatch(ingredientName, targetName) {
@@ -39,17 +39,42 @@ function ingredientExactMatch(ingredientName, targetName) {
     return false;
   }
   
-  const normalized1 = normalizeIngredientName(ingredientName);
-  const normalized2 = normalizeIngredientName(targetName);
-  return normalized1 === normalized2;
+  return sameIngredient(ingredientName, targetName);
+}
+
+// Expands broad allergy labels (e.g. "Nuts") to the ingredient names that
+// actually appear in recipes, so "Nuts" also catches peanut butter, etc.
+const ALLERGY_KEYWORDS = {
+  nuts: ['nut', 'peanut', 'cashew', 'almond', 'walnut', 'pecan', 'pistachio', 'hazelnut', 'pine nut'],
+  seafood: ['fish', 'shrimp', 'prawn', 'salmon', 'tuna', 'crab', 'lobster', 'anchovy', 'squid', 'scallop'],
+  dairy: ['milk', 'cheese', 'yogurt', 'yoghurt', 'butter', 'cream', 'ghee', 'whey'],
+  eggs: ['egg'],
+  gluten: ['gluten', 'flour', 'bread', 'pasta', 'noodle', 'wheat', 'soy sauce', 'oat'],
+  wheat: ['wheat', 'flour', 'bread', 'pasta', 'noodle', 'seitan'],
+  soy: ['soy', 'tofu', 'edamame', 'miso', 'tempeh'],
+};
+
+function allergyKeywords(allergy) {
+  const a = allergy.toLowerCase();
+  return ALLERGY_KEYWORDS[a] || [a];
+}
+
+function ingredientHasAllergy(ingredientName, userAllergies) {
+  const name = normalizeIngredientName(ingredientName);
+  return (userAllergies || []).some((allergy) => {
+    const a = allergy.toLowerCase();
+    if (name.includes(a)) return true;
+    // Coconut milk/cream is not a dairy allergen concern.
+    if (a === 'dairy' || a === 'milk') {
+      if (name === 'coconut milk' || name === 'coconut cream') return false;
+    }
+    return allergyKeywords(allergy).some((kw) => name.includes(kw));
+  });
 }
 
 function hasAllergyConflict(recipe, userAllergies) {
   if (!userAllergies || userAllergies.length === 0) return false;
-  const allergySet = userAllergies.map((a) => a.toLowerCase());
-  return recipe.ingredients.some((ing) =>
-    allergySet.some((allergy) => normalizeIngredientName(ing.name).includes(allergy.toLowerCase()))
-  );
+  return (recipe.ingredients || []).some((ing) => ingredientHasAllergy(ing.name, userAllergies));
 }
 
 function matchesDietaryPreference(recipe, preferences) {
@@ -69,30 +94,34 @@ function matchesSkillLevel(recipe, skillLevel) {
   return skillMap[skillLevel]?.includes(recipe.difficulty) ?? true;
 }
 
-function scoreRecipe(recipe, inventoryItems, user, mood = null) {
-  const totalIngredients = recipe.ingredients.length;
+function scoreRecipe(recipe, inventoryItems, user, mood = null, substitutions = []) {
+  const totalIngredients = (recipe.ingredients || []).filter((i) => !i.isOptional).length;
   if (totalIngredients === 0) return null;
 
-  const matched = [];
-  const missing = [];
-  let expiringBonus = 0;
-
-  recipe.ingredients.forEach((ing) => {
-    const invItem = ingredientMatchesInventory(ing.name, inventoryItems);
-    if (invItem) {
-      matched.push({ name: ing.name, inventoryItem: invItem.name, quantity: ing.quantity, unit: ing.unit });
-      const expiry = new Date(invItem.expiryDate);
-      const daysLeft = Math.ceil((expiry - new Date()) / (1000 * 60 * 60 * 24));
-      if (daysLeft <= 3 && daysLeft >= 0) expiringBonus += 15;
-    } else {
-      missing.push(ing.name);
-    }
+  // Strict canonical-identity + quantity-aware matching (three states).
+  const pantry = matchIngredientRequirements(recipe, inventoryItems, {
+    substitutions,
+    userAllergies: user?.allergies || [],
   });
+  const matched = pantry.matched.map((m) => ({
+    name: m.name,
+    inventoryItem: m.inventoryItem,
+    quantity: m.quantity,
+    unit: m.unit,
+  }));
+  const missing = pantry.missingNames;
+  const substitutedIngredients = pantry.substituted || [];
+  let expiringBonus = 0;
+  for (const r of pantry.results || []) {
+    if (r.status === 'AVAILABLE' && r.daysLeft !== null && r.daysLeft <= 3 && r.daysLeft >= 0) {
+      expiringBonus += 15;
+    }
+  }
 
   const matchPercentage = Math.round((matched.length / totalIngredients) * 100);
 
   if (hasAllergyConflict(recipe, user.allergies)) {
-    return { ...buildResult(recipe, matched, missing, matchPercentage, 0), allergyWarning: true, score: -1 };
+    return { ...buildResult(recipe, matched, missing, matchPercentage, 0, substitutedIngredients, pantry.results), allergyWarning: true, score: -1 };
   }
 
   if (!matchesDietaryPreference(recipe, user.dietaryPreferences)) {
@@ -116,10 +145,10 @@ function scoreRecipe(recipe, inventoryItems, user, mood = null) {
 
   const score = matchPercentage + expiringBonus + moodBonus + (matched.length === totalIngredients ? 10 : 0);
 
-  return buildResult(recipe, matched, missing, matchPercentage, score);
+  return buildResult(recipe, matched, missing, matchPercentage, score, substitutedIngredients, pantry.results);
 }
 
-function buildResult(recipe, matched, missing, matchPercentage, score) {
+function buildResult(recipe, matched, missing, matchPercentage, score, substitutedIngredients = [], ingredientStatuses = []) {
   return {
     _id: recipe._id,
     name: recipe.name,
@@ -136,13 +165,15 @@ function buildResult(recipe, matched, missing, matchPercentage, score) {
     nutrition: recipe.nutrition || { calories: 0, protein: 0, carbohydrates: 0, fat: 0, isEstimated: true },
     matchedIngredients: matched,
     missingIngredients: missing,
+    substitutedIngredients,
+    ingredientStatuses,
     matchPercentage,
     score,
     allergyWarning: false,
   };
 }
 
-function recommendRecipes(recipes, inventoryItems, user, mood = null, requiredIngredient = null, limit = 20) {
+function recommendRecipes(recipes, inventoryItems, user, mood = null, requiredIngredient = null, limit = 20, substitutions = []) {
   // First filter by required ingredient if specified
   let filteredRecipes = recipes;
   if (requiredIngredient) {
@@ -152,7 +183,7 @@ function recommendRecipes(recipes, inventoryItems, user, mood = null, requiredIn
   }
 
   const scored = filteredRecipes
-    .map((recipe) => scoreRecipe(recipe, inventoryItems, user, mood))
+    .map((recipe) => scoreRecipe(recipe, inventoryItems, user, mood, substitutions))
     .filter((r) => r && r.score >= 0 && r.matchPercentage > 0)
     .sort((a, b) => b.score - a.score || b.matchPercentage - a.matchPercentage);
 
@@ -165,5 +196,7 @@ module.exports = {
   ingredientMatchesInventory,
   ingredientExactMatch,
   hasAllergyConflict,
+  ingredientHasAllergy,
+  sameIngredient,
   MOOD_KEYWORDS,
 };

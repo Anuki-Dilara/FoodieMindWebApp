@@ -6,11 +6,14 @@ const CookedRecipe = require('../models/CookedRecipe');
 const ShoppingListItem = require('../models/ShoppingListItem');
 const ConsumptionRecord = require('../models/ConsumptionRecord');
 const User = require('../models/User');
+const RecommendationEvent = require('../models/RecommendationEvent');
 const { auth } = require('../middleware/auth');
 const { recommendRecipes, ingredientMatchesInventory, ingredientExactMatch } = require('../utils/recipeEngine');
 const { deductQuantity, convertToBase, convertFromBase, canConvert, convertQuantity, normalizeUnit, formatConversionDisplay } = require('../utils/unitConversion');
 const { getExpiryStatus } = require('../utils/expiryHelper');
 const { findSubstitutions, applySubstitution } = require('../services/substitutionService');
+const IngredientSubstitution = require('../models/IngredientSubstitution');
+const { matchIngredientRequirements } = require('../utils/ingredientMatcher');
 
 const router = express.Router();
 
@@ -62,7 +65,8 @@ router.get('/recommendations', async (req, res) => {
       }
     }
 
-    const recommendations = recommendRecipes(recipes, inventory, req.user, mood || null, ingredient || null);
+    const substitutions = await IngredientSubstitution.find({ isActive: true }).lean();
+    const recommendations = recommendRecipes(recipes, inventory, req.user, mood || null, ingredient || null, 20, substitutions);
     res.json({ recommendations, source: 'rule-based' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to get recommendations.', error: error.message });
@@ -149,7 +153,7 @@ router.get('/:id/ingredient-check', async (req, res) => {
           const normalizedRecipeUnit = normalizeUnit(ing.unit);
           
           // Try to convert item quantity to recipe unit
-          const conversion = convertQuantity(item.quantity, normalizedItemUnit, normalizedRecipeUnit, ing.name);
+          const conversion = convertQuantity(item.quantity, normalizedItemUnit, normalizedRecipeUnit, ing.name, { size: ing.size, form: ing.form, slicesPerLoaf: item.slicesPerLoaf, slicePack: item.slicePack });
           
           if (!conversion.success) {
             canCombine = false;
@@ -205,7 +209,7 @@ router.get('/:id/ingredient-check', async (req, res) => {
         // Show original unit equivalent if it's a mass-volume conversion
         const originalItem = effectiveUsableItems[0];
         if (originalItem && originalItem.unit !== ing.unit) {
-          const conversion = convertQuantity(ing.quantity, ing.unit, originalItem.unit, ing.name);
+          const conversion = convertQuantity(ing.quantity, ing.unit, originalItem.unit, ing.name, { size: ing.size, form: ing.form, slicesPerLoaf: originalItem.slicesPerLoaf, slicePack: originalItem.slicePack });
           if (conversion.success) {
             requiredInOriginalUnit = {
               quantity: Math.round(conversion.quantity * 1000) / 1000,
@@ -245,6 +249,25 @@ router.get('/:id/ingredient-check', async (req, res) => {
   }
 });
 
+router.post('/:id/opened', async (req, res) => {
+  try {
+    const recipe = await Recipe.findById(req.params.id);
+    if (!recipe) return res.status(404).json({ message: 'Recipe not found.' });
+
+    // Track recipe opened event
+    await RecommendationEvent.create({
+      userId: req.userId,
+      eventType: 'recipe_opened',
+      recipeId: recipe._id,
+      recipeName: recipe.name,
+    });
+
+    res.json({ message: 'Recipe open tracked' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to track recipe open.' });
+  }
+});
+
 router.post('/:id/cooked', async (req, res) => {
   try {
     const recipe = await Recipe.findById(req.params.id);
@@ -255,8 +278,19 @@ router.post('/:id/cooked', async (req, res) => {
     const acceptedSubstitutions = req.body.substitutions || [];
     const scaleFactor = selectedServings / recipe.servings;
 
+    // Validate serving count is reasonable
+    if (selectedServings < 1 || selectedServings > 50) {
+      return res.status(400).json({ message: 'Invalid serving count. Must be between 1 and 50.' });
+    }
+
+    // Validate substitutions format
+    if (acceptedSubstitutions && !Array.isArray(acceptedSubstitutions)) {
+      return res.status(400).json({ message: 'Invalid substitutions format.' });
+    }
+
     // Apply substitutions to recipe if any
     let workingRecipe = recipe;
+    const substitutionResults = [];
     for (const sub of acceptedSubstitutions) {
       const IngredientSubstitution = require('../models/IngredientSubstitution');
       const substitution = await IngredientSubstitution.findById(sub.substitutionId);
@@ -265,6 +299,19 @@ router.post('/:id/cooked', async (req, res) => {
         const result = await applySubstitution(workingRecipe, substitution, user);
         if (result.success) {
           workingRecipe = result.updatedRecipe;
+          substitutionResults.push({
+            originalIngredient: sub.originalIngredient,
+            substituteIngredient: sub.substituteIngredient,
+            success: true
+          });
+        } else {
+          // If substitution fails, include in response but don't block cooking
+          substitutionResults.push({
+            originalIngredient: sub.originalIngredient,
+            substituteIngredient: sub.substituteIngredient,
+            success: false,
+            reason: result.reason
+          });
         }
       }
     }
@@ -322,7 +369,7 @@ router.post('/:id/cooked', async (req, res) => {
         try {
           const normalizedItemUnit = normalizeUnit(item.unit);
           const normalizedRecipeUnit = normalizeUnit(ing.unit);
-          const conversion = convertQuantity(item.quantity, normalizedItemUnit, normalizedRecipeUnit, ing.name);
+          const conversion = convertQuantity(item.quantity, normalizedItemUnit, normalizedRecipeUnit, ing.name, { size: ing.size, form: ing.form, slicesPerLoaf: item.slicesPerLoaf, slicePack: item.slicePack });
           
           if (!conversion.success) {
             hasConversionError = true;
@@ -423,18 +470,18 @@ router.post('/:id/cooked', async (req, res) => {
           const normalizedRecipeUnit = normalizeUnit(ing.unit);
           
           // Convert what we can deduct from this item
-          const conversion = convertQuantity(item.quantity, normalizedItemUnit, normalizedRecipeUnit, ing.name);
+          const conversion = convertQuantity(item.quantity, normalizedItemUnit, normalizedRecipeUnit, ing.name, { size: ing.size, form: ing.form, slicesPerLoaf: item.slicesPerLoaf, slicePack: item.slicePack });
           if (!conversion.success) continue;
           
           const availableInRecipeUnit = conversion.quantity;
           const deductAmount = Math.min(remainingToDeduct, availableInRecipeUnit);
           
           // Convert back to item's unit for deduction
-          const reverseConversion = convertQuantity(deductAmount, normalizedRecipeUnit, normalizedItemUnit, ing.name);
+          const reverseConversion = convertQuantity(deductAmount, normalizedRecipeUnit, normalizedItemUnit, ing.name, { size: ing.size, form: ing.form, slicesPerLoaf: item.slicesPerLoaf, slicePack: item.slicePack });
           if (!reverseConversion.success) continue;
           
           const deductInItemUnit = reverseConversion.quantity;
-          const result = deductQuantity(item.quantity, normalizedItemUnit, deductInItemUnit, normalizedItemUnit, ing.name);
+          const result = deductQuantity(item.quantity, normalizedItemUnit, deductInItemUnit, normalizedItemUnit, ing.name, { size: ing.size, form: ing.form, slicesPerLoaf: item.slicesPerLoaf, slicePack: item.slicePack });
           
           // Handle virtual items (from package content)
           if (item.isVirtual) {
@@ -493,8 +540,8 @@ router.post('/:id/cooked', async (req, res) => {
             }
           }
 
-          ingredientsUsed.push({ name: ing.name, quantity: deductAmount, unit: ing.unit });
-          
+          ingredientsUsed.push({ name: item.name, quantity: deductAmount, unit: ing.unit });
+
           // Record consumption
           const consumedBase = convertToBase(deductAmount, ing.unit);
           const pricePerBase = item.baseQuantity > 0 ? item.price / item.baseQuantity : 0;
@@ -519,7 +566,18 @@ router.post('/:id/cooked', async (req, res) => {
       userId: req.userId,
       recipeId: recipe._id,
       recipeName: recipe.name,
+      recipeSource: recipe.source,
+      isAIGenerated: recipe.isAIGenerated,
       ingredientsUsed,
+      recipeSnapshot: {
+        name: workingRecipe.name,
+        mealType: workingRecipe.mealType,
+        ingredients: workingRecipe.ingredients,
+        preparation: workingRecipe.preparation,
+        dietaryType: workingRecipe.dietaryType,
+        cookingTime: workingRecipe.cookingTime,
+        difficulty: workingRecipe.difficulty,
+      },
       servings: selectedServings,
       substitutionsUsed: acceptedSubstitutions.map(sub => ({
         originalIngredient: sub.originalIngredient,
@@ -528,11 +586,26 @@ router.post('/:id/cooked', async (req, res) => {
       })),
     });
 
+    // Track recipe cooked event
+    await RecommendationEvent.create({
+      userId: req.userId,
+      eventType: 'recipe_cooked',
+      recipeId: recipe._id,
+      recipeName: recipe.name,
+      servings: selectedServings,
+      substitutionsUsed: acceptedSubstitutions.map(sub => ({
+        originalIngredient: sub.originalIngredient,
+        substituteIngredient: sub.substituteIngredient,
+      })),
+    });
+
     res.json({
       message: 'Yay! Recipe cooked and pantry updated.',
       ingredientsUsed,
       addedToShoppingList,
-      canCook: true
+      canCook: true,
+      substitutions: substitutionResults,
+      servingsCooked: selectedServings,
     });
   } catch (error) {
     res.status(500).json({ message: 'Failed to mark recipe as cooked.', error: error.message });
@@ -546,30 +619,25 @@ router.get('/:id/substitutions', async (req, res) => {
     if (!recipe) return res.status(404).json({ message: 'Recipe not found.' });
 
     const inventory = await FoodItem.find({ userId: req.userId });
-    const missingIngredients = [];
+    const user = await User.findById(req.userId).lean();
+    const substitutions = await IngredientSubstitution.find({ isActive: true }).lean();
 
-    // Find missing ingredients
-    for (const ing of recipe.ingredients) {
-      if (ing.isOptional) continue;
+    // Quantity-aware three-state matching: only genuinely MISSING ingredients
+    // need substitution suggestions.
+    const pantry = matchIngredientRequirements(recipe, inventory, {
+      substitutions,
+      userAllergies: user?.allergies || [],
+    });
+    const missingIngredients = pantry.results
+      .filter((r) => r.status === 'MISSING')
+      .map((r) => ({ name: r.name, quantity: r.required, unit: r.unit }));
 
-      const matchingItems = inventory.filter((item) =>
-        ingredientExactMatch(ing.name, item.name)
-      );
-      const usableItems = matchingItems.filter((item) => {
-        const { status } = getExpiryStatus(item.expiryDate);
-        return status !== 'Expired';
-      });
-
-      if (usableItems.length === 0) {
-        missingIngredients.push(ing);
-      }
-    }
-
-    const substitutions = await findSubstitutions(missingIngredients, inventory, recipe.mealType);
+    const substitutionOptions = await findSubstitutions(missingIngredients, inventory, recipe.mealType);
 
     res.json({
       missingIngredients,
-      substitutions,
+      substitutions: substitutionOptions,
+      ingredientStatuses: pantry.results,
     });
   } catch (error) {
     res.status(500).json({ message: 'Failed to find substitutions.', error: error.message });

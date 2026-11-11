@@ -26,9 +26,12 @@ export default function Recipes() {
       .finally(() => setLoading(false));
   }, [ingredient]);
 
-  const handleCook = async (recipe) => {
+  const handleCook = async (recipe, substitutions = []) => {
     try {
-      const res = await API.post(`/recipes/${recipe._id}/cooked`);
+      const res = await API.post(`/recipes/${recipe._id}/cooked`, {
+        servings: recipe.selectedServings || recipe.servings,
+        substitutions,
+      });
       toast.success(res.data.message);
       // Refresh recommendations to update ingredient availability
       const params = ingredient ? { ingredient } : {};
@@ -37,7 +40,7 @@ export default function Recipes() {
     } catch (e) {
       const message = e.response?.data?.message || 'Failed to cook recipe';
       if (e.response?.data?.shortages) {
-        const shortageDetails = e.response.data.shortages.map(s => 
+        const shortageDetails = e.response.data.shortages.map(s =>
           `${s.ingredient}: need ${s.required} ${s.unit}, have ${s.available} ${s.unitAvailable || s.unit}`
         ).join(', ');
         toast.error(`${message}. ${shortageDetails}`);

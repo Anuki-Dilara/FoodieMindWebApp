@@ -4,19 +4,29 @@ const Recipe = require('../models/Recipe');
 const FoodItem = require('../models/FoodItem');
 const ShoppingListItem = require('../models/ShoppingListItem');
 const { auth } = require('../middleware/auth');
-const { ingredientMatchesInventory } = require('../utils/recipeEngine');
+const { matchIngredientRequirements } = require('../utils/ingredientMatcher');
+const IngredientSubstitution = require('../models/IngredientSubstitution');
 
 const router = express.Router();
 
 router.use(auth);
 
+// Returns genuinely missing required ingredients (exact identity + quantity).
+// Substitute-available items still count as "missing original" for shopping
+// purposes — the user may explicitly choose a substitute instead.
 async function computeMissingIngredients(recipeId, userId) {
   const recipe = await Recipe.findById(recipeId);
   if (!recipe) return [];
   const inventory = await FoodItem.find({ userId });
-  return recipe.ingredients
-    .filter((ing) => !ingredientMatchesInventory(ing.name, inventory))
-    .map((ing) => ing.name);
+  const user = await require('../models/User').findById(userId).lean();
+  const substitutions = await IngredientSubstitution.find({ isActive: true }).lean();
+  const pantry = matchIngredientRequirements(recipe, inventory, {
+    substitutions,
+    userAllergies: user?.allergies || [],
+  });
+  return pantry.results
+    .filter((r) => r.status !== 'AVAILABLE')
+    .map((r) => ({ name: r.name, quantity: r.required, unit: r.unit, status: r.status }));
 }
 
 router.get('/', async (req, res) => {
@@ -44,7 +54,8 @@ router.post('/', async (req, res) => {
     const recipe = await Recipe.findById(recipeId);
     if (!recipe) return res.status(404).json({ message: 'Recipe not found.' });
 
-    const missingIngredients = await computeMissingIngredients(recipeId, req.userId);
+    const missingDetails = await computeMissingIngredients(recipeId, req.userId);
+    const missingIngredients = missingDetails.map((m) => m.name);
     const estimatedCost = missingIngredients.length * 200;
 
     const meal = await MealPlan.create({
@@ -57,18 +68,18 @@ router.post('/', async (req, res) => {
       estimatedCost,
     });
 
-    for (const ing of missingIngredients) {
+    for (const ing of missingDetails) {
       const exists = await ShoppingListItem.findOne({
         userId: req.userId,
-        name: { $regex: new RegExp(`^${ing}$`, 'i') },
+        name: { $regex: new RegExp(`^${ing.name}$`, 'i') },
         status: 'Pending',
       });
       if (!exists) {
         await ShoppingListItem.create({
           userId: req.userId,
-          name: ing,
-          quantity: 1,
-          unit: 'pieces',
+          name: ing.name,
+          quantity: ing.quantity || 1,
+          unit: ing.unit || 'pieces',
           source: 'meal-plan',
           priority: 'High',
         });
@@ -92,7 +103,8 @@ router.put('/:id', async (req, res) => {
       meal.recipeId = req.body.recipeId;
       const recipe = await Recipe.findById(req.body.recipeId);
       if (recipe) meal.recipeName = recipe.name;
-      meal.missingIngredients = await computeMissingIngredients(req.body.recipeId, req.userId);
+      const missingDetails = await computeMissingIngredients(req.body.recipeId, req.userId);
+      meal.missingIngredients = missingDetails.map((m) => m.name);
     }
 
     await meal.save();

@@ -8,6 +8,10 @@ const foodItemSchema = new mongoose.Schema({
     enum: [
       'Dairy', 'Fruits', 'Vegetables', 'Meat', 'Fish', 'Bakery',
       'Grains', 'Canned food', 'Snacks', 'Drinks', 'Spices', 'Other',
+      // Extended categories for the demo pantry / recipe matching
+      'Grains and Cereals', 'Legumes', 'Herbs and Spices',
+      'Nuts and Seeds', 'Cooking Essentials', 'Canned and Packaged Foods',
+      'Protein',
     ],
     default: 'Other',
   },
@@ -15,7 +19,9 @@ const foodItemSchema = new mongoose.Schema({
   baseQuantity: { type: Number, required: true },
   unit: {
     type: String,
-    enum: ['ml', 'l', 'g', 'kg', 'pieces', 'packets', 'cups', 'tablespoons', 'teaspoons', 'tbsp', 'tsp'],
+    enum: ['ml', 'l', 'g', 'kg', 'pieces', 'packets', 'cups', 'tablespoons', 'teaspoons', 'tbsp', 'tsp',
+      'bunch', 'bulb', 'loaf', 'can', 'head', 'clove', 'stalk', 'ear', 'cob',
+      'wedge', 'slice', 'segment', 'pod', 'sprig', 'whole', 'cube'],
     required: true,
   },
   baseUnit: { type: String, required: true },
@@ -28,12 +34,24 @@ const foodItemSchema = new mongoose.Schema({
       default: 'pieces'
     }
   },
+  // For bread items held in 'loaf' unit: how many slices this specific loaf
+  // contains. Overrides the conversion profile default; null = use profile
+  // default or leave loaf<->slice conversion unavailable.
+  slicesPerLoaf: { type: Number, default: null, min: 0 },
+  // For sliced cheese (and similar) items: package label info —
+  // { weightGrams: net package weight, slices: slices in that package }.
+  // Overrides the profile's standard slice weight for this item only.
+  slicePack: {
+    weightGrams: { type: Number, default: null, min: 0 },
+    slices: { type: Number, default: null, min: 0 },
+  },
   purchaseDate: { type: Date, default: Date.now },
   expiryDate: { type: Date, required: true },
   storageLocation: { type: String, default: 'Pantry' },
   price: { type: Number, default: 0, min: 0 },
   notes: { type: String, default: '' },
   status: { type: String, enum: ['Fresh', 'Use Soon', 'Expired'], default: 'Fresh' },
+  isSeed: { type: Boolean, default: false }, // marks built-in demo pantry items
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

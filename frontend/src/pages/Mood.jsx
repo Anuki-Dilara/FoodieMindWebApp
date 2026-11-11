@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import API from '../utils/api';
 import { MOODS } from '../utils/helpers';
@@ -8,37 +8,50 @@ import CookRecipeModal from '../components/CookRecipeModal';
 import LoadingSpinner from '../components/LoadingSpinner';
 import CuteButton from '../components/CuteButton';
 
+const TIME_OPTIONS = ['Any time', '15 minutes', '30 minutes', '45 minutes', '60 minutes'];
+const SERVING_OPTIONS = [null, 1, 2, 3, 4, 5, 6, 8, 10, 12];
+const EQUIPMENT_OPTIONS = ['Stove', 'Oven', 'Microwave', 'Blender', 'Rice Cooker', 'Air Fryer'];
+
+const DEFAULT_FILTERS = {
+  timeAvailable: 'Any time',
+  servings: null,
+  useIngredientFirst: null,
+  equipment: [],
+  noCookOnly: false,
+};
+
 export default function Mood() {
   const [selectedMoods, setSelectedMoods] = useState([]);
-  const [recommendations, setRecommendations] = useState({ readyToCook: [], needsIngredients: [] });
+  const [recommendations, setRecommendations] = useState({ readyToCook: [], needsIngredients: [], alternativesAvailable: true });
   const [loading, setLoading] = useState(false);
   const [cookRecipe, setCookRecipe] = useState(null);
   const [error, setError] = useState(null);
   const [refinePanelOpen, setRefinePanelOpen] = useState(false);
+  const [seenRecipeIds, setSeenRecipeIds] = useState(new Set());
+  const [ingredientSearch, setIngredientSearch] = useState('');
 
-  // Filter states
-  const [timeAvailable, setTimeAvailable] = useState('Any time');
-  const [mealSize, setMealSize] = useState('Any');
-  const [caloriePreference, setCaloriePreference] = useState('No preference');
-  const [sickPreferences, setSickPreferences] = useState({ warm: false, mild: false, soft: false });
-  const [cravingFlavor, setCravingFlavor] = useState(null);
-  const [cravingTemperature, setCravingTemperature] = useState(null);
-  const [useIngredientFirst, setUseIngredientFirst] = useState(null);
+  // The four essential filters — every change auto-refreshes recommendations.
+  const [timeAvailable, setTimeAvailable] = useState(DEFAULT_FILTERS.timeAvailable);
+  const [servings, setServings] = useState(DEFAULT_FILTERS.servings);
+  const [useIngredientFirst, setUseIngredientFirst] = useState(DEFAULT_FILTERS.useIngredientFirst);
+  const [equipment, setEquipment] = useState(DEFAULT_FILTERS.equipment);
+  const [noCookOnly, setNoCookOnly] = useState(DEFAULT_FILTERS.noCookOnly);
+
   const [inventoryItems, setInventoryItems] = useState([]);
-  const [selectedServings, setSelectedServings] = useState(null);
-  const [availableEquipment, setAvailableEquipment] = useState([]);
-  const [maxBudget, setMaxBudget] = useState(null);
-  const [budgetType, setBudgetType] = useState('total'); // 'total' or 'shopping'
 
-  // Load inventory on mount
+  // Stale-request protection: only the latest request may write results.
+  const requestSeq = useRef(0);
+  const abortRef = useRef(null);
+  const debounceRef = useRef(null);
+
+  // Load pantry once for the ingredient-first picker.
   useEffect(() => {
     const loadInventory = async () => {
       try {
         const res = await API.get('/food');
-        const usableItems = res.data.filter(item => {
+        const usableItems = (res.data || []).filter((item) => {
           const expiryDate = new Date(item.expiryDate);
-          const today = new Date();
-          return expiryDate >= today; // Only non-expired items
+          return expiryDate >= new Date();
         });
         setInventoryItems(usableItems);
       } catch (e) {
@@ -48,135 +61,181 @@ export default function Mood() {
     loadInventory();
   }, []);
 
-  const handleMoodToggle = (mood) => {
-    if (selectedMoods.includes(mood)) {
-      // Deselect if already selected
-      setSelectedMoods(selectedMoods.filter(m => m !== mood));
-    } else if (selectedMoods.length < 2) {
-      // Select if less than 2 selected
-      setSelectedMoods([...selectedMoods, mood]);
-    } else {
-      // Already have 2 selected, show message
-      toast.error('You can select up to 2 moods. Deselect one first.');
-    }
-  };
+  const buildFilters = useCallback(() => ({
+    timeAvailable,
+    selectedServings: servings,
+    useIngredientFirst,
+    equipment,
+    noCookOnly,
+  }), [timeAvailable, servings, useIngredientFirst, equipment, noCookOnly]);
 
-  const fetchRecommendations = async () => {
-    if (selectedMoods.length === 0) {
-      toast.error('Please select at least one mood');
-      return;
-    }
+  const fetchRecommendations = useCallback(async (excludeSeen = false, filtersOverride = null) => {
+    if (selectedMoods.length === 0) return;
+
+    // Invalidate any in-flight request and abort its HTTP call.
+    requestSeq.current += 1;
+    const seq = requestSeq.current;
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     setLoading(true);
     setError(null);
     try {
-      const filters = {
-        timeAvailable,
-        mealSize,
-        caloriePreference,
-        cravingFlavor,
-        cravingTemperature,
-        useIngredientFirst,
-        selectedServings,
-        availableEquipment,
-        maxBudget,
-        budgetType,
-      };
-
-      if (selectedMoods.includes('Sick')) {
-        filters.sickPreferences = sickPreferences;
+      const filters = { ...(filtersOverride || buildFilters()) };
+      if (excludeSeen && seenRecipeIds.size > 0) {
+        filters.excludeSeenRecipeIds = Array.from(seenRecipeIds);
       }
 
-      const res = await API.post('/mood/recommendations', { moods: selectedMoods, filters });
+      const res = await API.post('/mood/recommendations',
+        { moods: selectedMoods, filters },
+        { signal: controller.signal }
+      );
+
+      // A newer request started while this one was in flight — discard.
+      if (seq !== requestSeq.current) return;
+
       setRecommendations({
         readyToCook: res.data.readyToCook || [],
         needsIngredients: res.data.needsIngredients || [],
+        alternativesAvailable: res.data.alternativesAvailable !== false,
+        ingredientFirstNote: res.data.ingredientFirstNote || null,
       });
-      toast.success(res.data.message);
+
+      const newSeenIds = new Set(seenRecipeIds);
+      [...(res.data.readyToCook || []), ...(res.data.needsIngredients || [])].forEach((r) => newSeenIds.add(r._id));
+      setSeenRecipeIds(newSeenIds);
+
+      if (res.data.message) toast.success(res.data.message);
     } catch (e) {
+      if (e.name === 'CanceledError' || e.code === 'ERR_CANCELED' || e.name === 'AbortError') return;
+      if (seq !== requestSeq.current) return;
       console.error('Mood recommendations error:', e);
       setError(e.response?.data?.message || 'Failed to get mood recommendations');
       toast.error('Failed to get mood recommendations');
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
-  };
+  }, [selectedMoods, buildFilters, seenRecipeIds]);
 
-  const handleFilterChange = () => {
+  // Mood changes: clear stale results and fetch immediately.
+  useEffect(() => {
+    setRecommendations({ readyToCook: [], needsIngredients: [], alternativesAvailable: true, ingredientFirstNote: null });
+    setError(null);
+    setSeenRecipeIds(new Set());
     if (selectedMoods.length > 0) {
       fetchRecommendations();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMoods]);
+
+  // Filter changes: debounced auto-refresh — no Apply button needed.
+  useEffect(() => {
+    if (selectedMoods.length === 0) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setRecommendations({ readyToCook: [], needsIngredients: [], alternativesAvailable: true, ingredientFirstNote: null });
+      fetchRecommendations();
+    }, 350);
+    return () => clearTimeout(debounceRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeAvailable, servings, useIngredientFirst, equipment, noCookOnly]);
+
+  const handleMoodToggle = (mood) => {
+    if (selectedMoods.includes(mood)) {
+      setSelectedMoods(selectedMoods.filter((m) => m !== mood));
+    } else if (selectedMoods.length < 2) {
+      setSelectedMoods([...selectedMoods, mood]);
+    } else {
+      toast.error('You can select up to 2 moods. Deselect one first.');
+    }
   };
+
+  const toggleEquipment = (eq) => {
+    setEquipment((prev) => prev.includes(eq) ? prev.filter((e) => e !== eq) : [...prev, eq]);
+  };
+
+  const resetFilters = () => {
+    setTimeAvailable(DEFAULT_FILTERS.timeAvailable);
+    setServings(DEFAULT_FILTERS.servings);
+    setUseIngredientFirst(DEFAULT_FILTERS.useIngredientFirst);
+    setEquipment(DEFAULT_FILTERS.equipment);
+    setNoCookOnly(DEFAULT_FILTERS.noCookOnly);
+    setIngredientSearch('');
+    // State effects trigger the refresh automatically; fetch explicitly too
+    // in case the user clicks reset while values are already default.
+    if (selectedMoods.length > 0) {
+      setRecommendations({ readyToCook: [], needsIngredients: [], alternativesAvailable: true, ingredientFirstNote: null });
+      fetchRecommendations(false, {
+        timeAvailable: DEFAULT_FILTERS.timeAvailable,
+        selectedServings: null,
+        useIngredientFirst: null,
+        equipment: [],
+        noCookOnly: false,
+      });
+    }
+  };
+
+  const hasActiveFilters =
+    timeAvailable !== DEFAULT_FILTERS.timeAvailable ||
+    servings !== DEFAULT_FILTERS.servings ||
+    useIngredientFirst !== DEFAULT_FILTERS.useIngredientFirst ||
+    equipment.length > 0 ||
+    noCookOnly;
+
+  const activeChips = [];
+  if (timeAvailable !== 'Any time') activeChips.push(`${timeAvailable}`);
+  if (servings) activeChips.push(`${servings} serving${servings > 1 ? 's' : ''}`);
+  if (useIngredientFirst) activeChips.push(`${useIngredientFirst} first`);
+  equipment.forEach((e) => activeChips.push(e));
+  if (noCookOnly) activeChips.push('No-cook only');
+
+  const filteredIngredients = inventoryItems.filter((item) =>
+    !ingredientSearch || item.name.toLowerCase().includes(ingredientSearch.toLowerCase())
+  );
 
   const handleCook = async (recipe, substitutions = []) => {
     try {
       const res = await API.post(`/recipes/${recipe._id}/cooked`, {
-        servings: recipe.selectedServings,
+        servings: recipe.selectedServings || recipe.servings,
         substitutions,
       });
       toast.success(res.data.message);
-      // Refresh recommendations to update ingredient availability
-      if (selectedMoods.length > 0) {
-        fetchRecommendations();
-      }
+      if (selectedMoods.length > 0) fetchRecommendations();
     } catch (e) {
       const message = e.response?.data?.message || 'Failed to cook recipe';
       if (e.response?.data?.shortages) {
-        const shortageDetails = e.response.data.shortages.map(s =>
+        const shortageDetails = e.response.data.shortages.map((s) =>
           `${s.ingredient}: need ${s.required} ${s.unit}, have ${s.available} ${s.unitAvailable || s.unit}`
         ).join(', ');
         toast.error(`${message}. ${shortageDetails}`);
       } else {
         toast.error(message);
       }
-      throw e; // Re-throw to keep modal open
+      throw e;
     }
   };
 
-  const handleModalClose = () => {
-    setCookRecipe(null);
-  };
-
-  const openCookModal = (recipe) => {
-    setCookRecipe(recipe);
-  };
+  const handleModalClose = () => setCookRecipe(null);
+  const openCookModal = (recipe) => setCookRecipe(recipe);
 
   const handleFeedback = async (recipeId, helpful) => {
     try {
-      // Send feedback for the first selected mood
-      const mood = selectedMoods[0];
-      await API.post('/mood/feedback', { recipeId, mood, helpful });
+      await Promise.all(
+        selectedMoods.map((mood) => API.post('/mood/feedback', { recipeId, mood, helpful }))
+      );
       toast.success(helpful ? 'Thanks for your feedback!' : 'Thanks for letting us know!');
     } catch (e) {
       toast.error('Failed to save feedback');
     }
   };
 
-  const clearFilters = () => {
-    setTimeAvailable('Any time');
-    setMealSize('Any');
-    setCaloriePreference('No preference');
-    setSickPreferences({ warm: false, mild: false, soft: false });
-    if (selectedMoods.length > 0) {
-      fetchRecommendations();
-    }
-  };
-
   const resetAll = () => {
     setSelectedMoods([]);
-    setTimeAvailable('Any time');
-    setMealSize('Any');
-    setCaloriePreference('No preference');
-    setSickPreferences({ warm: false, mild: false, soft: false });
-    setCravingFlavor(null);
-    setCravingTemperature(null);
-    setUseIngredientFirst(null);
-    setSelectedServings(null);
-    setAvailableEquipment([]);
-    setMaxBudget(null);
-    setBudgetType('total');
-    setRecommendations({ readyToCook: [], needsIngredients: [] });
+    resetFilters();
+    setRecommendations({ readyToCook: [], needsIngredients: [], alternativesAvailable: true, ingredientFirstNote: null });
     setError(null);
+    setSeenRecipeIds(new Set());
   };
 
   return (
@@ -192,7 +251,7 @@ export default function Mood() {
 
       {selectedMoods.length > 0 && (
         <>
-          {/* Refine Suggestions Collapsible Panel */}
+          {/* Refine Suggestions — four essential filters, auto-applied */}
           <div className="card mb-6">
             <button
               onClick={() => setRefinePanelOpen(!refinePanelOpen)}
@@ -204,245 +263,96 @@ export default function Mood() {
 
             {refinePanelOpen && (
               <div className="px-4 pb-4 pt-2 border-t border-primary/10">
-                <div className="grid md:grid-cols-3 gap-4">
-                  {/* Time Filter */}
+                <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {/* 1. Time Available */}
                   <div>
-                    <label className="block text-sm font-medium text-charcoal mb-2">Time Available</label>
+                    <label className="block text-sm font-medium text-charcoal mb-2">⏱️ Time available</label>
                     <select
                       value={timeAvailable}
-                      onChange={(e) => { setTimeAvailable(e.target.value); handleFilterChange(); }}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none"
+                      onChange={(e) => setTimeAvailable(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none text-sm"
                     >
-                      <option value="Any time">Any time</option>
-                      <option value="10 minutes">10 minutes</option>
-                      <option value="20 minutes">20 minutes</option>
-                      <option value="30 minutes">30 minutes</option>
+                      {TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
                     </select>
                   </div>
 
-                  {/* Meal Size Filter */}
+                  {/* 2. Number of Servings */}
                   <div>
-                    <label className="block text-sm font-medium text-charcoal mb-2">Meal Size</label>
+                    <label className="block text-sm font-medium text-charcoal mb-2">🍽️ Servings</label>
                     <select
-                      value={mealSize}
-                      onChange={(e) => { setMealSize(e.target.value); handleFilterChange(); }}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none"
+                      value={servings ?? ''}
+                      onChange={(e) => setServings(e.target.value === '' ? null : Number(e.target.value))}
+                      className="w-full px-3 py-2 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none text-sm"
                     >
-                      <option value="Any">Any</option>
-                      <option value="Snack">Snack</option>
-                      <option value="Light meal">Light meal</option>
-                      <option value="Full meal">Full meal</option>
+                      <option value="">Recipe default</option>
+                      {SERVING_OPTIONS.filter(Boolean).map((n) => (
+                        <option key={n} value={n}>{n} serving{n > 1 ? 's' : ''}</option>
+                      ))}
                     </select>
                   </div>
 
-                  {/* Calorie Preference */}
+                  {/* 3. Use This Ingredient First */}
                   <div>
-                    <label className="block text-sm font-medium text-charcoal mb-2">Calories per serving</label>
-                    <select
-                      value={caloriePreference}
-                      onChange={(e) => { setCaloriePreference(e.target.value); handleFilterChange(); }}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none"
-                    >
-                      <option value="No preference">No preference</option>
-                      <option value="Snack">Under 300 cal</option>
-                      <option value="Light meal">300-500 cal</option>
-                      <option value="Full meal">500-800 cal</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Craving Preferences */}
-                <div className="mt-4 pt-4 border-t border-primary/10">
-                  <label className="block text-sm font-medium text-charcoal mb-2">Cravings (optional)</label>
-                  <div className="grid md:grid-cols-2 gap-4">
-                    {/* Flavor */}
-                    <div>
-                      <label className="block text-xs text-charcoal/50 mb-1">Flavor</label>
-                      <select
-                        value={cravingFlavor || ''}
-                        onChange={(e) => { setCravingFlavor(e.target.value || null); handleFilterChange(); }}
-                        className="w-full px-3 py-2 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none text-sm"
-                      >
-                        <option value="">No preference</option>
-                        <option value="sweet">Sweet</option>
-                        <option value="savoury">Savoury</option>
-                        <option value="spicy">Spicy</option>
-                        <option value="mild">Mild</option>
-                      </select>
-                    </div>
-
-                    {/* Temperature */}
-                    <div>
-                      <label className="block text-xs text-charcoal/50 mb-1">Temperature</label>
-                      <select
-                        value={cravingTemperature || ''}
-                        onChange={(e) => { setCravingTemperature(e.target.value || null); handleFilterChange(); }}
-                        className="w-full px-3 py-2 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none text-sm"
-                      >
-                        <option value="">No preference</option>
-                        <option value="warm">Warm</option>
-                        <option value="cold">Cold</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Use This Ingredient First */}
-                <div className="mt-4 pt-4 border-t border-primary/10">
-                  <label className="block text-sm font-medium text-charcoal mb-2">Use this ingredient first (optional)</label>
-                  <select
-                    value={useIngredientFirst || ''}
-                    onChange={(e) => { setUseIngredientFirst(e.target.value || null); handleFilterChange(); }}
-                    className="w-full px-3 py-2 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none text-sm"
-                  >
-                    <option value="">No preference</option>
-                    {inventoryItems.map((item) => (
-                      <option key={item._id} value={item.name}>
-                        {item.name} ({item.quantity} {item.unit})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Number of Servings */}
-                <div className="mt-4 pt-4 border-t border-primary/10">
-                  <label className="block text-sm font-medium text-charcoal mb-2">Number of servings (optional)</label>
-                  <div className="flex items-center gap-2">
+                    <label className="block text-sm font-medium text-charcoal mb-2">🥬 Use first (from pantry)</label>
                     <input
-                      type="number"
-                      min="1"
-                      max="12"
-                      value={selectedServings || ''}
-                      onChange={(e) => {
-                        const val = e.target.value ? Math.min(12, Math.max(1, parseInt(e.target.value))) : null;
-                        setSelectedServings(val);
-                        handleFilterChange();
-                      }}
-                      placeholder="Use recipe default"
-                      className="w-24 px-3 py-2 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none text-sm"
+                      className="w-full px-3 py-2 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none text-sm mb-1"
+                      placeholder="Search pantry…"
+                      value={ingredientSearch}
+                      onChange={(e) => setIngredientSearch(e.target.value)}
                     />
-                    <span className="text-sm text-charcoal/50">servings (max 12)</span>
+                    <select
+                      value={useIngredientFirst ?? ''}
+                      onChange={(e) => setUseIngredientFirst(e.target.value || null)}
+                      className="w-full px-3 py-2 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none text-sm"
+                      size={4}
+                    >
+                      <option value="">No preference</option>
+                      {filteredIngredients.map((item) => {
+                        const expiring = new Date(item.expiryDate) <= new Date(Date.now() + 3 * 86400000);
+                        return (
+                          <option key={item._id} value={item.name}>
+                            {item.name} ({item.quantity} {item.unit}){expiring ? ' · expiring soon' : ''}
+                          </option>
+                        );
+                      })}
+                    </select>
                   </div>
-                </div>
 
-                {/* Available Equipment */}
-                <div className="mt-4 pt-4 border-t border-primary/10">
-                  <label className="block text-sm font-medium text-charcoal mb-2">Available equipment (optional)</label>
-                  <div className="flex flex-wrap gap-2">
-                    {['Stove', 'Oven', 'Microwave', 'Blender', 'Rice Cooker', 'Air Fryer'].map((eq) => (
-                      <label key={eq} className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={availableEquipment.includes(eq)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setAvailableEquipment([...availableEquipment, eq]);
-                            } else {
-                              setAvailableEquipment(availableEquipment.filter(item => item !== eq));
-                            }
-                            handleFilterChange();
-                          }}
-                          className="w-4 h-4 rounded border-2 border-primary/20"
-                        />
-                        <span className="text-sm">{eq}</span>
-                      </label>
-                    ))}
-                    <label className="flex items-center gap-2 cursor-pointer">
+                  {/* 4. Cooking Setup */}
+                  <div>
+                    <label className="block text-sm font-medium text-charcoal mb-2">🔥 Cooking setup</label>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1.5 mb-2">
+                      {EQUIPMENT_OPTIONS.map((eq) => (
+                        <label key={eq} className="flex items-center gap-1.5 cursor-pointer text-sm">
+                          <input
+                            type="checkbox"
+                            checked={equipment.includes(eq)}
+                            onChange={() => toggleEquipment(eq)}
+                            className="w-4 h-4 rounded border-2 border-primary/20"
+                          />
+                          {eq}
+                        </label>
+                      ))}
+                    </div>
+                    <label className="flex items-center gap-1.5 cursor-pointer text-sm">
                       <input
                         type="checkbox"
-                        checked={availableEquipment.includes('No-cook')}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setAvailableEquipment([...availableEquipment, 'No-cook']);
-                          } else {
-                            setAvailableEquipment(availableEquipment.filter(item => item !== 'No-cook'));
-                          }
-                          handleFilterChange();
-                        }}
+                        checked={noCookOnly}
+                        onChange={(e) => setNoCookOnly(e.target.checked)}
                         className="w-4 h-4 rounded border-2 border-primary/20"
                       />
-                      <span className="text-sm">No-cook recipes only</span>
+                      No-cook recipes only
                     </label>
                   </div>
                 </div>
 
-                {/* Budget Filter */}
-                <div className="mt-4 pt-4 border-t border-primary/10">
-                  <label className="block text-sm font-medium text-charcoal mb-2">Maximum budget (optional)</label>
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs text-charcoal/50 mb-1">Budget limit (LKR)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="10"
-                        value={maxBudget || ''}
-                        onChange={(e) => {
-                          const val = e.target.value ? Math.max(0, parseFloat(e.target.value)) : null;
-                          setMaxBudget(val);
-                          handleFilterChange();
-                        }}
-                        placeholder="No limit"
-                        className="w-full px-3 py-2 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-charcoal/50 mb-1">Budget type</label>
-                      <select
-                        value={budgetType}
-                        onChange={(e) => { setBudgetType(e.target.value); handleFilterChange(); }}
-                        className="w-full px-3 py-2 rounded-xl border-2 border-primary/20 bg-white focus:border-primary focus:outline-none text-sm"
-                      >
-                        <option value="total">Total ingredient value</option>
-                        <option value="shopping">Additional shopping cost only</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Sick-specific preferences */}
-                {selectedMoods.includes('Sick') && (
-                  <div className="mt-4 pt-4 border-t border-primary/10">
-                    <label className="block text-sm font-medium text-charcoal mb-2">Food preferences</label>
-                    <div className="flex flex-wrap gap-4">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={sickPreferences.warm}
-                          onChange={(e) => { setSickPreferences({ ...sickPreferences, warm: e.target.checked }); handleFilterChange(); }}
-                          className="w-4 h-4 rounded border-2 border-primary/20"
-                        />
-                        <span className="text-sm">Warm</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={sickPreferences.mild}
-                          onChange={(e) => { setSickPreferences({ ...sickPreferences, mild: e.target.checked }); handleFilterChange(); }}
-                          className="w-4 h-4 rounded border-2 border-primary/20"
-                        />
-                        <span className="text-sm">Mild</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={sickPreferences.soft}
-                          onChange={(e) => { setSickPreferences({ ...sickPreferences, soft: e.target.checked }); handleFilterChange(); }}
-                          className="w-4 h-4 rounded border-2 border-primary/20"
-                        />
-                        <span className="text-sm">Soft</span>
-                      </label>
-                    </div>
-                  </div>
-                )}
-
-                <div className="mt-4 pt-4 border-t border-primary/10 flex gap-2">
-                  <CuteButton variant="outline" className="!py-1.5 !px-4 text-sm" onClick={clearFilters}>
-                    Reset Filters
-                  </CuteButton>
-                  <CuteButton variant="primary" className="!py-1.5 !px-4 text-sm" onClick={() => { setRefinePanelOpen(false); fetchRecommendations(); }}>
-                    Apply Filters
-                  </CuteButton>
+                <div className="mt-4 pt-3 border-t border-primary/10 flex items-center justify-between">
+                  <p className="text-xs text-charcoal/50">Filters apply automatically as you change them.</p>
+                  {hasActiveFilters && (
+                    <CuteButton variant="outline" className="!py-1 !px-3 text-sm" onClick={resetFilters}>
+                      ↺ Reset filters
+                    </CuteButton>
+                  )}
                 </div>
               </div>
             )}
@@ -460,17 +370,44 @@ export default function Mood() {
 
           {!loading && !error && (
             <>
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                 <h2 className="text-xl font-bold text-charcoal">
                   {selectedMoods.length === 1
                     ? `Meals for when you're feeling ${selectedMoods[0].toLowerCase()} ${MOODS.find((m) => m.id === selectedMoods[0])?.emoji}`
                     : `Meals for when you're feeling ${selectedMoods.join(' + ')}`
                   }
                 </h2>
-                <CuteButton variant="outline" className="!py-1.5 !px-4 text-sm" onClick={resetAll}>
-                  Reset
-                </CuteButton>
+                <div className="flex gap-2">
+                  {recommendations.alternativesAvailable && (
+                    <CuteButton variant="outline" className="!py-1.5 !px-4 text-sm" onClick={() => fetchRecommendations(true)}>
+                      Show different ideas
+                    </CuteButton>
+                  )}
+                  <CuteButton variant="outline" className="!py-1.5 !px-4 text-sm" onClick={resetAll}>
+                    Reset
+                  </CuteButton>
+                </div>
               </div>
+
+              {/* Active filter chips */}
+              {activeChips.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 mb-4">
+                  {activeChips.map((chip, i) => (
+                    <span key={i} className="text-xs bg-primary/20 text-charcoal px-3 py-1 rounded-full">
+                      {chip}
+                    </span>
+                  ))}
+                  <button onClick={resetFilters} className="text-xs text-danger hover:underline">
+                    Clear all
+                  </button>
+                </div>
+              )}
+
+              {recommendations.ingredientFirstNote && (
+                <p className="text-sm text-charcoal/60 bg-cream rounded-xl px-4 py-2 mb-4">
+                  ℹ️ {recommendations.ingredientFirstNote}
+                </p>
+              )}
 
               {/* Ready to Cook */}
               {recommendations.readyToCook.length > 0 && (
@@ -518,7 +455,12 @@ export default function Mood() {
                   <div className="text-5xl mb-3">🤷</div>
                   <p className="text-charcoal/60 mb-4">No matching recipes found with your current filters.</p>
                   <p className="text-sm text-charcoal/40 mb-4">Try adjusting your preferences or updating your pantry.</p>
-                  <CuteButton onClick={clearFilters}>Clear Filters</CuteButton>
+                  {recommendations.alternativesAvailable && (
+                    <CuteButton variant="outline" className="!py-1.5 !px-4 text-sm" onClick={() => fetchRecommendations(true)}>
+                      Show different ideas
+                    </CuteButton>
+                  )}
+                  <CuteButton onClick={resetFilters}>Clear Filters</CuteButton>
                 </div>
               )}
             </>

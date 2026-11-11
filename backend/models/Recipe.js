@@ -4,14 +4,18 @@ const ingredientSchema = new mongoose.Schema({
   name: { type: String, required: true },
   quantity: { type: Number, default: 1 },
   unit: { type: String, default: 'pieces' },
+  size: { type: String, enum: ['xs', 's', 'm', 'l', 'xl'], default: null },
+  form: { type: String, enum: ['whole', 'chopped', 'diced', 'sliced', 'grated', 'shredded', 'mashed'], default: null },
   isOptional: { type: Boolean, default: false },
 }, { _id: false });
 
 const nutritionSchema = new mongoose.Schema({
+  // All values are per serving
   calories: { type: Number, default: 0 },
   protein: { type: Number, default: 0 },
   carbohydrates: { type: Number, default: 0 },
   fat: { type: Number, default: 0 },
+  fibre: { type: Number, default: 0 },
   isEstimated: { type: Boolean, default: true },
 }, { _id: false });
 
@@ -44,8 +48,18 @@ const recipeSchema = new mongoose.Schema({
   moodTags: [{ type: String }],
   nutrition: nutritionSchema,
   preparation: preparationSchema,
-  tags: [{ type: String }], // e.g., ['comfort', 'warm', 'mild', 'soft-food']
+  tags: [{ type: String }], // e.g., ['comfort', 'warm', 'mild', 'soft-food', 'colorful', 'fresh']
   ingredientCategories: [{ type: String }], // e.g., ['protein', 'vegetables', 'grains']
+  foodTemperature: {
+    type: String,
+    enum: ['warm', 'cold', 'room-temperature', 'any'],
+    default: 'any',
+  },
+  texture: [{ type: String }], // e.g., ['soft', 'smooth', 'creamy', 'crisp', 'chewy']
+  flavourProfile: [{ type: String }], // e.g., ['mild', 'sweet', 'savoury', 'spicy', 'tangy', 'familiar']
+  comfortScore: { type: Number, min: 1, max: 5, default: 3 }, // 1-5 comfort-food suitability
+  colourVariety: { type: Number, min: 0, default: 0 }, // distinct ingredient colours (0-6)
+  isSeed: { type: Boolean, default: false }, // marks built-in sample recipes
   image: { type: String, default: '' },
   source: {
     type: String,

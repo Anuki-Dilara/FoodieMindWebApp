@@ -7,9 +7,48 @@ export const formatDate = (date) =>
 export const CATEGORIES = [
   'Dairy', 'Fruits', 'Vegetables', 'Meat', 'Fish', 'Bakery',
   'Grains', 'Canned food', 'Snacks', 'Drinks', 'Spices', 'Other',
+  'Grains and Cereals', 'Legumes', 'Herbs and Spices',
+  'Nuts and Seeds', 'Cooking Essentials', 'Canned and Packaged Foods',
+  'Protein',
 ];
 
-export const UNITS = ['ml', 'l', 'g', 'kg', 'pieces', 'packets', 'cups', 'tablespoons', 'teaspoons'];
+export const UNITS = [
+  'ml', 'l', 'g', 'kg', 'pieces', 'packets', 'cups', 'tablespoons',
+  'teaspoons', 'tbsp', 'tsp', 'bunch', 'bulb', 'loaf', 'can',
+  // Produce-specific count units
+  'head', 'clove', 'stalk', 'ear', 'cob', 'wedge', 'slice',
+  'segment', 'pod', 'sprig', 'whole', 'cube',
+];
+
+export const PRODUCE_SIZES = [
+  { value: '', label: 'Any size' },
+  { value: 'xs', label: 'Extra small' },
+  { value: 's', label: 'Small' },
+  { value: 'm', label: 'Medium' },
+  { value: 'l', label: 'Large' },
+  { value: 'xl', label: 'Extra large' },
+];
+
+export const PRODUCE_FORMS = [
+  { value: '', label: 'Any form' },
+  { value: 'whole', label: 'Whole' },
+  { value: 'chopped', label: 'Chopped' },
+  { value: 'diced', label: 'Diced' },
+  { value: 'sliced', label: 'Sliced' },
+  { value: 'grated', label: 'Grated' },
+  { value: 'shredded', label: 'Shredded' },
+  { value: 'mashed', label: 'Mashed' },
+];
+
+// Rough "running low" thresholds per unit family, used for the low-stock badge.
+export const isLowStock = (item) => {
+  if (!item || item.status === 'Expired') return false;
+  const q = Number(item.quantity) || 0;
+  const u = item.unit;
+  if (['kg', 'g'].includes(u)) return u === 'kg' ? q <= 0.5 : q <= 100;
+  if (['l', 'ml'].includes(u)) return u === 'l' ? q <= 0.25 : q <= 100;
+  return q <= 2; // pieces, packets, cups, bunch, bulb, loaf, can, etc.
+};
 
 export const ALLERGIES = ['Milk', 'Eggs', 'Nuts', 'Seafood', 'Gluten', 'Soy', 'Wheat', 'Other'];
 
