@@ -52,6 +52,9 @@ const foodItemSchema = new mongoose.Schema({
   notes: { type: String, default: '' },
   status: { type: String, enum: ['Fresh', 'Use Soon', 'Expired'], default: 'Fresh' },
   isSeed: { type: Boolean, default: false }, // marks built-in demo pantry items
+  // Idempotency key for quantity-merge operations — a retried merge request
+  // with the same id is a no-op instead of double-adding stock.
+  mergeRequestId: { type: String, default: null },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

@@ -60,6 +60,12 @@ export default function ShoppingList() {
     }
   };
 
+  const handleUpdate = async (id, { quantity, unit }) => {
+    const res = await API.put(`/shopping-list/${id}`, { quantity, unit });
+    setItems((prev) => prev.map((i) => (i._id === id ? res.data.item : i)));
+    toast.success('Quantity updated');
+  };
+
   const handleMarkBought = async (e) => {
     e.preventDefault();
     try {
@@ -113,6 +119,7 @@ export default function ShoppingList() {
               key={item._id}
               item={item}
               onDelete={handleDelete}
+              onSave={handleUpdate}
               onMarkBought={(i) => {
                 setShowBought(i);
                 setBoughtForm({ ...boughtForm, quantity: i.quantity, unit: i.unit });

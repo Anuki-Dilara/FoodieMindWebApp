@@ -5,12 +5,42 @@ const FoodItem = require('../models/FoodItem');
 const Budget = require('../models/Budget');
 const validate = require('../middleware/validate');
 const { auth } = require('../middleware/auth');
-const { convertToBase } = require('../utils/unitConversion');
+const { convertToBase, normalizeUnit } = require('../utils/unitConversion');
 const { getExpiryStatus } = require('../utils/expiryHelper');
+const produce = require('../utils/produceConversionService');
 
 const router = express.Router();
 
 router.use(auth);
+
+// All storage-valid units (mirrors FoodItem.unit enum + volume/count aliases).
+const KNOWN_UNITS = new Set([
+  'ml', 'l', 'g', 'kg', 'pieces', 'packets', 'cups', 'tablespoons', 'teaspoons',
+  'tbsp', 'tsp', 'bunch', 'bulb', 'loaf', 'can', 'head', 'clove', 'stalk',
+  'ear', 'cob', 'wedge', 'slice', 'segment', 'pod', 'sprig', 'whole', 'cube',
+]);
+
+// Validates a shopping-list quantity+unit pair. When the ingredient has a
+// conversion profile, only that profile's supported units are allowed —
+// incompatible units are rejected rather than silently stored.
+function validateQuantityUnit(name, quantity, unit) {
+  const qty = Number(quantity);
+  if (!Number.isFinite(qty) || qty <= 0) {
+    return { ok: false, message: 'Quantity must be a positive number.' };
+  }
+  const normalizedUnit = normalizeUnit(unit);
+  if (!KNOWN_UNITS.has(normalizedUnit)) {
+    return { ok: false, message: `Invalid unit "${unit}".` };
+  }
+  const suggestion = produce.supportedUnitsFor(name);
+  if (suggestion && !suggestion.units.includes(normalizedUnit)) {
+    return {
+      ok: false,
+      message: `Unit "${unit}" is not supported for ${suggestion.profile.name}.`,
+    };
+  }
+  return { ok: true, quantity: qty, unit: normalizedUnit };
+}
 
 router.get('/', async (req, res) => {
   try {
@@ -38,11 +68,15 @@ router.post(
   validate,
   async (req, res) => {
     try {
+      const name = (req.body.name || '').trim();
+      const check = validateQuantityUnit(name, req.body.quantity ?? 1, req.body.unit || 'pieces');
+      if (!check.ok) return res.status(400).json({ message: check.message });
+
       const item = await ShoppingListItem.create({
         userId: req.userId,
-        name: req.body.name,
-        quantity: req.body.quantity || 1,
-        unit: req.body.unit || 'pieces',
+        name,
+        quantity: check.quantity,
+        unit: check.unit,
         estimatedPrice: req.body.estimatedPrice || 0,
         priority: req.body.priority || 'Medium',
         source: req.body.source || 'manual',
@@ -59,7 +93,18 @@ router.put('/:id', async (req, res) => {
     const item = await ShoppingListItem.findOne({ _id: req.params.id, userId: req.userId });
     if (!item) return res.status(404).json({ message: 'Item not found.' });
 
-    ['name', 'quantity', 'unit', 'estimatedPrice', 'priority', 'status'].forEach((f) => {
+    // Validate the effective quantity+unit pair when either is being changed.
+    const nextName = req.body.name !== undefined ? String(req.body.name).trim() : item.name;
+    const nextQty = req.body.quantity !== undefined ? req.body.quantity : item.quantity;
+    const nextUnit = req.body.unit !== undefined ? req.body.unit : item.unit;
+    if (req.body.quantity !== undefined || req.body.unit !== undefined || req.body.name !== undefined) {
+      const check = validateQuantityUnit(nextName, nextQty, nextUnit);
+      if (!check.ok) return res.status(400).json({ message: check.message });
+      item.quantity = check.quantity;
+      item.unit = check.unit;
+    }
+
+    ['name', 'estimatedPrice', 'priority', 'status'].forEach((f) => {
       if (req.body[f] !== undefined) item[f] = req.body[f];
     });
     await item.save();

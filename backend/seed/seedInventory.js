@@ -10,8 +10,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // expiry-priority recommendation feature can be demonstrated.
 const DEMO_INVENTORY = [
   // --- Grains and carbohydrates ---
-  { name: 'White Rice', quantity: 2, unit: 'kg', category: 'Grains and Cereals', expiryDays: 365, purchasedDaysAgo: 30, storageLocation: 'Pantry', price: 420, notes: 'Samba rice' },
-  { name: 'Red Rice', quantity: 1, unit: 'kg', category: 'Grains and Cereals', expiryDays: 365, purchasedDaysAgo: 30, storageLocation: 'Pantry', price: 380 },
+  { name: 'Rice', quantity: 2, unit: 'kg', category: 'Grains and Cereals', expiryDays: 365, purchasedDaysAgo: 30, storageLocation: 'Pantry', price: 400, notes: 'Generic rice' },
   { name: 'Basmati Rice', quantity: 500, unit: 'g', category: 'Grains and Cereals', expiryDays: 365, purchasedDaysAgo: 20, storageLocation: 'Pantry', price: 320 },
   { name: 'Dhal (Red Lentils)', quantity: 500, unit: 'g', category: 'Legumes', expiryDays: 365, purchasedDaysAgo: 45, storageLocation: 'Pantry', price: 280 },
   { name: 'Chickpeas', quantity: 500, unit: 'g', category: 'Legumes', expiryDays: 365, purchasedDaysAgo: 45, storageLocation: 'Pantry', price: 320 },
@@ -70,6 +69,7 @@ const DEMO_INVENTORY = [
   { name: 'Cinnamon Sticks', quantity: 2, unit: 'pieces', category: 'Herbs and Spices', expiryDays: 365, purchasedDaysAgo: 60, storageLocation: 'Pantry', price: 110 },
   { name: 'Soy Sauce', quantity: 150, unit: 'ml', category: 'Canned and Packaged Foods', expiryDays: 365, purchasedDaysAgo: 40, storageLocation: 'Pantry', price: 180 },
   { name: 'Tomato Paste', quantity: 1, unit: 'can', category: 'Canned and Packaged Foods', expiryDays: 365, purchasedDaysAgo: 40, storageLocation: 'Pantry', price: 150 },
+  { name: 'Coconut Milk', quantity: 400, unit: 'ml', category: 'Canned and Packaged Foods', expiryDays: 365, purchasedDaysAgo: 40, storageLocation: 'Pantry', price: 260 },
 ];
 
 /**

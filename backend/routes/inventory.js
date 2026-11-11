@@ -6,12 +6,70 @@ const ShoppingListItem = require('../models/ShoppingListItem');
 const Budget = require('../models/Budget');
 const validate = require('../middleware/validate');
 const { auth } = require('../middleware/auth');
-const { convertToBase, deductQuantity } = require('../utils/unitConversion');
+const { convertToBase, deductQuantity, convertQuantity, normalizeUnit } = require('../utils/unitConversion');
+const { canonicalName, sameIngredient, findMatchingItems } = require('../utils/ingredientIdentity');
 const { getExpiryStatus } = require('../utils/expiryHelper');
 
 const router = express.Router();
 
 router.use(auth);
+
+// Map a produce-profile category onto the FoodItem category enum.
+const PROFILE_CATEGORY_MAP = {
+  vegetable: 'Vegetables',
+  fruit: 'Fruits',
+  herb: 'Herbs and Spices',
+  bakery: 'Bakery',
+  dairy: 'Dairy',
+};
+
+function sameCalendarDay(a, b) {
+  if (!a || !b) return false;
+  const da = new Date(a); const db = new Date(b);
+  if (isNaN(da) || isNaN(db)) return false;
+  return da.toISOString().slice(0, 10) === db.toISOString().slice(0, 10);
+}
+
+// Analyse how a prospective new entry relates to an existing pantry item.
+function analyseMatch(item, name, quantity, unit, expiryDate) {
+  const conversion = convertQuantity(quantity, unit, item.unit, item.name || name, {
+    slicesPerLoaf: item.slicesPerLoaf,
+    slicePack: item.slicePack,
+  });
+  const mergeable = !!conversion.success && sameCalendarDay(item.expiryDate, expiryDate);
+  return {
+    _id: item._id,
+    name: item.name,
+    category: item.category,
+    quantity: item.quantity,
+    unit: item.unit,
+    expiryDate: item.expiryDate,
+    sameExpiry: sameCalendarDay(item.expiryDate, expiryDate),
+    mergeable,
+    mergeBlockedReason: !sameCalendarDay(item.expiryDate, expiryDate)
+      ? 'different-expiry'
+      : (!conversion.success ? 'incompatible-units' : null),
+    conversion: conversion.success
+      ? {
+          quantity: conversion.quantity,
+          unit: conversion.unit,
+          isEstimate: !!conversion.isEstimate,
+          note: conversion.conversion ? `${conversion.quantity} ${conversion.unit} ≈ ${quantity} ${unit} — estimated conversion` : null,
+        }
+      : null,
+    projectedQuantity: conversion.success && sameCalendarDay(item.expiryDate, expiryDate)
+      ? Math.round((item.quantity + conversion.quantity) * 10000) / 10000
+      : null,
+    projectedUnit: item.unit,
+  };
+}
+
+async function findCanonicalMatches(userId, name) {
+  const items = await FoodItem.find({ userId }).select(
+    'name category quantity unit expiryDate baseQuantity baseUnit slicesPerLoaf slicePack'
+  ).lean();
+  return findMatchingItems(name, items);
+}
 
 function enrichFoodItem(item) {
   const { status, daysLeft } = getExpiryStatus(item.expiryDate);
@@ -63,6 +121,32 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Check whether a prospective entry matches an existing pantry ingredient.
+// Used by the Add Food dialog to offer "update existing inventory" instead of
+// silently creating duplicates. Read-only — never modifies data.
+router.post(
+  '/duplicate-check',
+  [
+    body('name').trim().notEmpty().withMessage('Food name is required'),
+    body('quantity').isFloat({ gt: 0 }).withMessage('Quantity must be greater than zero'),
+    body('unit').notEmpty().withMessage('Unit is required'),
+    body('expiryDate').notEmpty().withMessage('Expiry date is required'),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { name, quantity, unit, expiryDate } = req.body;
+      const matches = await findCanonicalMatches(req.userId, name);
+      res.json({
+        canonicalName: canonicalName(name),
+        matches: matches.map((m) => analyseMatch(m, name, Number(quantity), unit, expiryDate)),
+      });
+    } catch (error) {
+      res.status(500).json({ message: 'Failed to check for duplicates.' });
+    }
+  }
+);
+
 router.post(
   '/',
   [
@@ -75,15 +159,78 @@ router.post(
   validate,
   async (req, res) => {
     try {
-      const { name, category, quantity, unit, purchaseDate, expiryDate, storageLocation, price, notes, slicesPerLoaf, slicePack } = req.body;
+      const { name, category, quantity, unit, purchaseDate, expiryDate, storageLocation, price, notes, slicesPerLoaf, slicePack, mergeWithId, allowSeparateBatch, requestId } = req.body;
+
+      // --- Merge into an existing item (user confirmed "update existing") ---
+      if (mergeWithId) {
+        const existing = await FoodItem.findOne({ _id: mergeWithId, userId: req.userId });
+        if (!existing) return res.status(404).json({ message: 'Existing inventory item not found.' });
+        if (!sameIngredient(existing.name, name)) {
+          return res.status(400).json({ message: 'Cannot merge — these are different ingredients.' });
+        }
+        if (!sameCalendarDay(existing.expiryDate, expiryDate)) {
+          return res.status(409).json({
+            code: 'DIFFERENT_EXPIRY',
+            message: 'Existing stock has a different expiry date. Add as a separate batch to preserve both.',
+          });
+        }
+        const conversion = convertQuantity(quantity, unit, existing.unit, existing.name, {
+          slicesPerLoaf: existing.slicesPerLoaf,
+          slicePack: existing.slicePack,
+        });
+        if (!conversion.success) {
+          return res.status(400).json({ message: `Cannot merge units: ${conversion.message}` });
+        }
+        // Idempotent retry: same requestId already applied → no double-add.
+        if (requestId && existing.mergeRequestId === requestId) {
+          return res.json({ message: 'Already merged — no changes made.', item: enrichFoodItem(existing), merged: true, duplicate: true });
+        }
+        const addBase = convertToBase(conversion.quantity, conversion.unit);
+        const update = {
+          $inc: { quantity: conversion.quantity, baseQuantity: addBase.quantity },
+          $set: { updatedAt: new Date() },
+        };
+        if (requestId) update.$set.mergeRequestId = requestId;
+        if (price > 0) update.$inc.price = price;
+        const updated = await FoodItem.findOneAndUpdate(
+          { _id: existing._id, userId: req.userId },
+          update,
+          { new: true }
+        );
+        return res.json({
+          message: `${existing.name} updated — now ${updated.quantity} ${updated.unit}.`,
+          item: enrichFoodItem(updated),
+          merged: true,
+        });
+      }
+
+      // --- Backend duplicate guard (independent of frontend detection) ---
+      const matches = await findCanonicalMatches(req.userId, name);
+      if (matches.length && !allowSeparateBatch) {
+        return res.status(409).json({
+          code: 'EXISTING_INGREDIENT',
+          message: `${name} already exists in your pantry. Confirm to update the existing item or add a separate batch.`,
+          canonicalName: canonicalName(name),
+          matches: matches.map((m) => ({
+            _id: m._id, name: m.name, quantity: m.quantity, unit: m.unit, expiryDate: m.expiryDate,
+          })),
+        });
+      }
+
       const base = convertToBase(quantity, unit);
 
       const { status } = getExpiryStatus(expiryDate);
+      // Keep a canonical ingredient under one consistent category: when stock
+      // already exists and the user left the category as 'Other', inherit the
+      // existing item's category instead of creating a divergent entry.
+      const effectiveCategory = category && category !== 'Other'
+        ? category
+        : (matches[0]?.category || category || 'Other');
 
       const item = await FoodItem.create({
         userId: req.userId,
         name,
-        category: category || 'Other',
+        category: effectiveCategory,
         quantity,
         baseQuantity: base.quantity,
         unit,

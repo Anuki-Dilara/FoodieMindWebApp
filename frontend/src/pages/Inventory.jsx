@@ -57,11 +57,11 @@ export default function Inventory() {
   const handleSave = async (data) => {
     try {
       if (editItem) {
-        await API.put(`/inventory/${editItem._id}`, data);
-        toast.success('Food item updated!');
+        const res = await API.put(`/inventory/${editItem._id}`, data);
+        toast.success(res.data?.message || 'Food item updated!');
       } else {
-        await API.post('/inventory', data);
-        toast.success('Food item added to your pantry!');
+        const res = await API.post('/inventory', data);
+        toast.success(res.data?.message || 'Food item added to your pantry!');
       }
       setShowAdd(false);
       setEditItem(null);
