@@ -9,6 +9,7 @@ const CookedRecipe = require('../models/CookedRecipe');
 const MoodFeedback = require('../models/MoodFeedback');
 const IngredientSubstitution = require('../models/IngredientSubstitution');
 const { ingredientExactMatch, ingredientHasAllergy } = require('./recipeEngine');
+const { isStapleWater } = require('./ingredientIdentity');
 const { getExpiryStatus } = require('./expiryHelper');
 const { convertQuantity, convertToBase } = require('./unitConversion');
 const {
@@ -124,6 +125,8 @@ function estimatePantryCost(recipe, inventory) {
 
   for (const ing of recipe.ingredients || []) {
     if (ing.isOptional) continue;
+    // Plain drinking water is a household staple — no pantry cost to estimate.
+    if (isStapleWater(ing.name)) continue;
 
     const usableItems = (inventory || []).filter((item) => {
       if (!ingredientExactMatch(ing.name, item.name)) return false;

@@ -39,6 +39,16 @@ export default function Mood() {
 
   const [inventoryItems, setInventoryItems] = useState([]);
 
+  // AI Pantry Explorer state
+  const [aiRecipes, setAiRecipes] = useState([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiStage, setAiStage] = useState(0);
+  const [aiError, setAiError] = useState(null);
+  const [aiMessage, setAiMessage] = useState(null);
+  const aiBusyRef = useRef(false);
+  const aiKeyRef = useRef(null);
+  const aiStageTimer = useRef(null);
+
   // Stale-request protection: only the latest request may write results.
   const requestSeq = useRef(0);
   const abortRef = useRef(null);
@@ -106,6 +116,16 @@ export default function Mood() {
       [...(res.data.readyToCook || []), ...(res.data.needsIngredients || [])].forEach((r) => newSeenIds.add(r._id));
       setSeenRecipeIds(newSeenIds);
 
+      // AI Pantry Explorer fallback: only when NO existing recipe is
+      // pantry-complete for the selected mood(s).
+      if ((res.data.readyToCook || []).length === 0) {
+        explorePantry(selectedMoods, filters);
+      } else {
+        setAiRecipes([]);
+        setAiMessage(null);
+        setAiError(null);
+      }
+
       if (res.data.message) toast.success(res.data.message);
     } catch (e) {
       if (e.name === 'CanceledError' || e.code === 'ERR_CANCELED' || e.name === 'AbortError') return;
@@ -118,11 +138,104 @@ export default function Mood() {
     }
   }, [selectedMoods, buildFilters, seenRecipeIds]);
 
+  // ---- AI Pantry Explorer -------------------------------------------------
+  const AI_STAGES = [
+    '🔍 Exploring your pantry',
+    '🧩 Finding ingredient combinations',
+    '👨‍🍳 Creating recipes',
+    '⚖️ Checking ingredient quantities',
+    '✅ Validating your new recipes',
+  ];
+
+  const clearAiStageTimer = () => {
+    if (aiStageTimer.current) { clearInterval(aiStageTimer.current); aiStageTimer.current = null; }
+  };
+
+  const explorePantry = useCallback(async (moods, filters) => {
+    const signature = JSON.stringify({ moods, filters });
+    if (aiBusyRef.current || aiKeyRef.current === signature) return;
+    aiKeyRef.current = signature;
+    aiBusyRef.current = true;
+
+    setAiLoading(true);
+    setAiError(null);
+    setAiMessage(null);
+    setAiRecipes([]);
+    setAiStage(0);
+    clearAiStageTimer();
+    aiStageTimer.current = setInterval(() => {
+      setAiStage((s) => Math.min(s + 1, AI_STAGES.length - 1));
+    }, 6000);
+
+    try {
+      const res = await API.post('/ai/pantry-explorer', { moods, filters });
+      if (res.data.activated === false) {
+        setAiMessage(res.data.message || 'Existing recipes already match your mood and pantry.');
+      } else {
+        const recipes = (res.data.recipes || []).map((r, i) => ({ ...r, aiKey: `ai-${i}` }));
+        setAiRecipes(recipes);
+        setAiMessage(res.data.message || null);
+        if (recipes.length === 0) {
+          setAiError(res.data.message || 'AI could not create a pantry-valid recipe this time.');
+        }
+      }
+    } catch (e) {
+      setAiError(e.response?.data?.message || 'AI Pantry Explorer is unavailable right now.');
+    } finally {
+      clearAiStageTimer();
+      setAiLoading(false);
+      aiBusyRef.current = false;
+    }
+  }, []);
+
+  const regenerateAi = () => {
+    aiKeyRef.current = null;
+    explorePantry(selectedMoods, buildFilters());
+  };
+
+  const ensureAiRecipeSaved = async (recipe) => {
+    if (recipe._id) return recipe;
+    if (recipe._savePromise) return recipe._savePromise;
+    const p = API.post('/ai/pantry-explorer/save', { recipe })
+      .then((r) => r.data.recipe)
+      .catch((e) => { toast.error(e.response?.data?.message || 'Failed to save recipe'); throw e; });
+    setAiRecipes((prev) => prev.map((r) => (r.aiKey === recipe.aiKey ? { ...r, _savePromise: p } : r)));
+    const saved = await p;
+    const merged = { ...saved, aiGenerated: true, isAIGenerated: true, selectedMood: recipe.selectedMood, explanation: recipe.explanation };
+    setAiRecipes((prev) => prev.map((r) => (r.aiKey === recipe.aiKey ? merged : r)));
+    return merged;
+  };
+
+  const handleAiCook = async (recipe) => {
+    try {
+      const saved = await ensureAiRecipeSaved(recipe);
+      openCookModal({ ...saved, selectedServings: saved.servings });
+    } catch { /* toast already shown */ }
+  };
+
+  const handleAiPlanner = async (recipe) => {
+    try {
+      const saved = await ensureAiRecipeSaved(recipe);
+      await API.post('/meal-planner', {
+        recipeId: saved._id,
+        date: new Date().toISOString().slice(0, 10),
+        mealType: saved.mealType || 'Dinner',
+      });
+      toast.success('Added to your meal plan!');
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to add to meal plan');
+    }
+  };
+
   // Mood changes: clear stale results and fetch immediately.
   useEffect(() => {
     setRecommendations({ readyToCook: [], needsIngredients: [], alternativesAvailable: true, ingredientFirstNote: null });
     setError(null);
     setSeenRecipeIds(new Set());
+    setAiRecipes([]);
+    setAiError(null);
+    setAiMessage(null);
+    aiKeyRef.current = null;
     if (selectedMoods.length > 0) {
       fetchRecommendations();
     }
@@ -135,6 +248,9 @@ export default function Mood() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       setRecommendations({ readyToCook: [], needsIngredients: [], alternativesAvailable: true, ingredientFirstNote: null });
+      setAiRecipes([]);
+      setAiError(null);
+      setAiMessage(null);
       fetchRecommendations();
     }, 350);
     return () => clearTimeout(debounceRef.current);
@@ -445,6 +561,83 @@ export default function Mood() {
                         onFeedback={handleFeedback}
                       />
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {/* AI Pantry Explorer — fallback when no existing recipe is pantry-complete */}
+              {(aiLoading || aiRecipes.length > 0 || aiError || aiMessage || recommendations.readyToCook.length === 0) && (
+                <div className="mb-8">
+                  <div className="card p-5">
+                    <div className="flex items-start justify-between flex-wrap gap-2 mb-1">
+                      <div>
+                        <h3 className="text-lg font-bold text-charcoal">🤖 AI Pantry Explorer</h3>
+                        <p className="text-sm text-charcoal/60">
+                          When no suitable recipe is available, let FoodieMind explore your pantry and create new meals using ingredients you already have.
+                        </p>
+                      </div>
+                      {!aiLoading && (aiRecipes.length > 0 || aiError) && (
+                        <CuteButton variant="outline" className="!py-1.5 !px-4 text-sm" onClick={regenerateAi}>
+                          🔎 Explore More Recipes
+                        </CuteButton>
+                      )}
+                    </div>
+
+                    {aiLoading && (
+                      <div className="mt-4">
+                        <LoadingSpinner />
+                        <p className="text-center text-sm text-charcoal/60 mt-2">{AI_STAGES[aiStage]}…</p>
+                      </div>
+                    )}
+
+                    {!aiLoading && aiError && (
+                      <div className="mt-4 text-center">
+                        <p className="text-sm text-charcoal/60 mb-3">{aiError}</p>
+                        <p className="text-xs text-charcoal/40 mb-3">Your regular recommendations above are unaffected.</p>
+                        <CuteButton variant="outline" className="!py-1.5 !px-4 text-sm" onClick={regenerateAi}>
+                          Try again
+                        </CuteButton>
+                      </div>
+                    )}
+
+                    {!aiLoading && aiMessage && aiRecipes.length === 0 && !aiError && (
+                      <p className="mt-3 text-sm text-charcoal/60">{aiMessage}</p>
+                    )}
+
+                    {aiRecipes.length > 0 && (
+                      <>
+                        <p className="mt-3 text-xs text-charcoal/50">
+                          ✨ {aiMessage || 'AI-generated recipes — every ingredient verified against your pantry.'}
+                        </p>
+                        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mt-4">
+                          {aiRecipes.map((r) => (
+                            <div key={r.aiKey || r._id} className="relative">
+                              <span className="absolute top-2 right-2 z-10 text-[10px] font-bold bg-accent/90 text-white px-2 py-0.5 rounded-full">
+                                ✨ AI Generated
+                              </span>
+                              {!r._id && (
+                                <span className="absolute top-2 left-2 z-10 text-[10px] font-bold bg-info/90 text-charcoal px-2 py-0.5 rounded-full">
+                                  Pantry Verified
+                                </span>
+                              )}
+                              {r.varietyTags?.length > 0 && (
+                                <p className="text-[10px] text-charcoal/50 mb-1 px-1">✦ {r.varietyTags.join(' · ')}</p>
+                              )}
+                              {r.similarToPrevious && (
+                                <p className="text-[10px] text-accent mb-1 px-1">↻ Similar to a previous suggestion</p>
+                              )}
+                              <RecipeCard
+                                recipe={r}
+                                onCook={handleAiCook}
+                                onAddToPlanner={handleAiPlanner}
+                                showReasons={true}
+                                onFeedback={r._id ? handleFeedback : undefined}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               )}

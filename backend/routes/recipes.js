@@ -14,6 +14,7 @@ const { getExpiryStatus } = require('../utils/expiryHelper');
 const { findSubstitutions, applySubstitution } = require('../services/substitutionService');
 const IngredientSubstitution = require('../models/IngredientSubstitution');
 const { matchIngredientRequirements } = require('../utils/ingredientMatcher');
+const { isStapleWater } = require('../utils/ingredientIdentity');
 
 const router = express.Router();
 
@@ -93,6 +94,21 @@ router.get('/:id/ingredient-check', async (req, res) => {
           hasEnough: true,
           status: 'optional',
           isOptional: true
+        });
+        continue;
+      }
+
+      // Plain drinking water is a household staple — always available.
+      if (isStapleWater(ing.name)) {
+        ingredientCheck.push({
+          name: ing.name,
+          required: ing.quantity,
+          unit: ing.unit,
+          available: ing.quantity,
+          unitAvailable: ing.unit,
+          hasEnough: true,
+          status: 'staple',
+          isStaple: true,
         });
         continue;
       }
@@ -326,6 +342,8 @@ router.post('/:id/cooked', async (req, res) => {
       const scaledQuantity = ing.quantity * scaleFactor;
       // Skip optional ingredients
       if (ing.isOptional) continue;
+      // Plain drinking water needs no pantry stock — never a shortage.
+      if (isStapleWater(ing.name)) continue;
 
       const matchingItems = inventory.filter((item) => ingredientExactMatch(ing.name, item.name));
       const usableItems = matchingItems
@@ -433,6 +451,8 @@ router.post('/:id/cooked', async (req, res) => {
     for (const ing of workingRecipe.ingredients) {
       // Skip optional ingredients
       if (ing.isOptional) continue;
+      // Plain drinking water is never deducted from inventory.
+      if (isStapleWater(ing.name)) continue;
 
       // Scale ingredient quantity based on custom servings
       const scaledQuantity = ing.quantity * scaleFactor;
@@ -536,6 +556,10 @@ router.post('/:id/cooked', async (req, res) => {
               }
             } else {
               item.quantity = result.quantity;
+              item.unit = result.unit;
+              const newBase = convertToBase(result.quantity, result.unit);
+              item.baseQuantity = newBase.quantity;
+              item.baseUnit = newBase.baseUnit;
               await item.save();
             }
           }

@@ -52,7 +52,7 @@ export default function Login() {
           </div>
 
           <p className="text-sm text-charcoal/50 text-right">
-            <span className="cursor-pointer hover:text-primary">Forgot password? (Coming soon)</span>
+            <Link to="/forgot-password" className="hover:text-primary hover:underline">Forgot password?</Link>
           </p>
 
           <CuteButton type="submit" variant="primary" className="w-full" disabled={loading}>

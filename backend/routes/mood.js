@@ -71,6 +71,23 @@ router.post('/feedback', async (req, res) => {
       { upsert: true, new: true }
     );
 
+    // AI-generated recipes: mirror feedback onto the generation-history entry
+    // so future explorations can avoid (not-helpful) or prefer (helpful)
+    // similar combinations — user-scoped, bounded, never permanent.
+    try {
+      const recipeDoc = await Recipe.findById(recipeId).lean();
+      const fp = recipeDoc?.aiGeneration?.fingerprint;
+      if (recipeDoc?.isAIGenerated && fp) {
+        const { AIRecipeGeneration } = require('../models/AIRecipeGeneration');
+        await AIRecipeGeneration.updateMany(
+          { userId: req.userId, fingerprint: fp },
+          { $set: { feedback: helpful ? 'helpful' : 'not-helpful' } }
+        );
+      }
+    } catch (e) {
+      console.error('AI feedback mirror failed:', e.message);
+    }
+
     // Track feedback event
     await RecommendationEvent.create({
       userId: req.userId,

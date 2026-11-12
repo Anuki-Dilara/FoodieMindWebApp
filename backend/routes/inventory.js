@@ -376,8 +376,9 @@ router.post(
 
       item.quantity = result.quantity;
       item.unit = result.unit;
-      item.baseQuantity = result.baseQuantity;
-      item.baseUnit = result.baseUnit;
+      const newBase = convertToBase(result.quantity, result.unit);
+      item.baseQuantity = newBase.quantity;
+      item.baseUnit = newBase.baseUnit;
       await item.save();
 
       res.json({

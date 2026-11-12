@@ -6,7 +6,7 @@
 
 const { getExpiryStatus } = require('./expiryHelper');
 const { convertQuantity, isBreadFamilyName, isCheeseFamilyName } = require('./unitConversion');
-const { sameIngredient } = require('./ingredientIdentity');
+const { sameIngredient, isStapleWater } = require('./ingredientIdentity');
 
 // Lazy-required to avoid a circular dependency with recipeEngine.
 function ingredientHasAllergy(name, allergies) {
@@ -108,6 +108,20 @@ function matchIngredientRequirements(recipe, inventory = [], options = {}) {
     const name = ing.name;
     const produceOpts = { size: ing.size, form: ing.form };
     const detail = { name, required, unit: ing.unit, status: null };
+
+    // Plain drinking water is a household staple — always available, never
+    // checked against pantry quantities, never missing, never deducted.
+    if (isStapleWater(name)) {
+      detail.status = AVAILABILITY_STATUS.AVAILABLE;
+      detail.availabilityState = 'STAPLE_AVAILABLE';
+      detail.matchType = 'staple';
+      detail.availableQuantity = required;
+      detail.availableUnit = ing.unit;
+      satisfiedCount += 1;
+      matched.push({ name, quantity: ing.quantity, unit: ing.unit, status: 'AVAILABLE', inventoryItem: null });
+      results.push(detail);
+      continue;
+    }
 
     // --- exact identity match ---
     const exactItems = usable.filter((item) => sameIngredient(item.name, name));

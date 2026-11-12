@@ -34,4 +34,13 @@ function findMatchingItems(name, inventory = []) {
   return (inventory || []).filter((item) => sameIngredient(item.name, name));
 }
 
-module.exports = { canonicalName, canonicalId, sameIngredient, findMatchingItems };
+// Plain drinking water is a household staple: always available, never matched
+// against pantry stock, deducted after cooking, or reported as missing.
+// Only the canonical 'water' identity qualifies — 'coconut water',
+// 'sparkling water', 'mineral water', stocks and other liquids remain normal
+// tracked ingredients with their own canonical names.
+function isStapleWater(name) {
+  return canonicalName(name) === 'water';
+}
+
+module.exports = { canonicalName, canonicalId, sameIngredient, findMatchingItems, isStapleWater };

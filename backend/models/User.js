@@ -15,6 +15,13 @@ const userSchema = new mongoose.Schema({
     default: 'Beginner',
   },
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  // Password-reset state. Only the SHA-256 hash of the reset token is stored —
+  // the raw token exists only in the emailed link. A new request overwrites
+  // these fields, invalidating any previous outstanding token.
+  resetPasswordTokenHash: { type: String, default: null, index: true },
+  resetPasswordExpires: { type: Date, default: null },
+  resetPasswordRequestedAt: { type: Date, default: null },
+  passwordChangedAt: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now },
 });
 
@@ -25,6 +32,8 @@ userSchema.methods.comparePassword = async function (password) {
 userSchema.methods.toJSON = function () {
   const obj = this.toObject();
   delete obj.passwordHash;
+  delete obj.resetPasswordTokenHash;
+  delete obj.resetPasswordExpires;
   return obj;
 };
 

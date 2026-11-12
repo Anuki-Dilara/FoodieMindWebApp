@@ -69,6 +69,11 @@ const recipeSchema = new mongoose.Schema({
   externalId: { type: String, default: null },
   isAIGenerated: { type: Boolean, default: false },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  aiGeneration: {
+    mood: { type: String, default: null },
+    generatedAt: { type: Date, default: null },
+    fingerprint: { type: String, default: null },
+  },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

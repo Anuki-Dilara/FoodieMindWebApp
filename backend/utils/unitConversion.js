@@ -256,6 +256,12 @@ const INGREDIENT_ALIASES = {
   'colby jack': 'colby',
   'ricotta cheese': 'ricotta',
   'halloumi cheese': 'halloumi',
+  // Plain drinking water — household staple. Only these exact identities map
+  // to 'water'; coconut/sparkling/mineral water, stock and other liquids
+  // keep their own canonical names.
+  'plain water': 'water',
+  'drinking water': 'water',
+  'tap water': 'water',
 };
 
 // Bread-family canonical names (incl. 'bread roll'). Used to block the
