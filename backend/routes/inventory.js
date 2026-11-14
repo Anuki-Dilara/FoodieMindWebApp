@@ -9,6 +9,7 @@ const { auth } = require('../middleware/auth');
 const { convertToBase, deductQuantity, convertQuantity, normalizeUnit } = require('../utils/unitConversion');
 const { canonicalName, sameIngredient, findMatchingItems } = require('../utils/ingredientIdentity');
 const { getExpiryStatus } = require('../utils/expiryHelper');
+const { checkPantryEmpty } = require('../utils/pantryStatus');
 
 const router = express.Router();
 
@@ -115,6 +116,8 @@ router.get('/', async (req, res) => {
       items = items.filter((item) => item.status === status);
     }
 
+    // Pantry-empty check on load: detects stock that expired since last visit.
+    await checkPantryEmpty(req.userId).catch((e) => console.error('pantry-empty check failed:', e.message));
     res.json({ items, count: items.length });
   } catch (error) {
     res.status(500).json({ message: 'Failed to fetch inventory.' });
@@ -257,6 +260,7 @@ router.post(
         }
       }
 
+      await checkPantryEmpty(req.userId).catch((e) => console.error('pantry-empty check failed:', e.message));
       res.status(201).json({ message: 'Food item added to your pantry!', item: enrichFoodItem(item) });
     } catch (error) {
       res.status(500).json({ message: 'Failed to add food item.', error: error.message });
@@ -304,6 +308,7 @@ router.put('/:id', async (req, res) => {
 
     item.status = getExpiryStatus(item.expiryDate).status;
     await item.save();
+    await checkPantryEmpty(req.userId).catch((e) => console.error('pantry-empty check failed:', e.message));
     res.json({ message: 'Food item updated!', item: enrichFoodItem(item) });
   } catch (error) {
     res.status(500).json({ message: 'Failed to update food item.' });
@@ -314,6 +319,7 @@ router.delete('/:id', async (req, res) => {
   try {
     const item = await FoodItem.findOneAndDelete({ _id: req.params.id, userId: req.userId });
     if (!item) return res.status(404).json({ message: 'Food item not found.' });
+    await checkPantryEmpty(req.userId).catch((e) => console.error('pantry-empty check failed:', e.message));
     res.json({ message: 'Food item removed from pantry.' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to delete food item.' });
@@ -381,6 +387,7 @@ router.post(
       item.baseUnit = newBase.baseUnit;
       await item.save();
 
+      await checkPantryEmpty(req.userId).catch((e) => console.error('pantry-empty check failed:', e.message));
       res.json({
         message: `Consumed ${consumedQuantity} ${consumedUnit} of ${item.name}.`,
         item: enrichFoodItem(item),

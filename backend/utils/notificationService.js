@@ -6,6 +6,7 @@ const Budget = require('../models/Budget');
 const ShoppingListItem = require('../models/ShoppingListItem');
 const { getExpiryStatus } = require('./expiryHelper');
 const { ingredientMatchesInventory } = require('./recipeEngine');
+const { checkPantryEmpty } = require('./pantryStatus');
 
 async function createNotification(userId, title, message, type = 'general') {
   return Notification.create({ userId, title, message, type });
@@ -152,6 +153,8 @@ async function runDailyChecks(userId) {
   await checkExpiringFood(userId);
   await checkMissingIngredientsForTomorrow(userId);
   await checkBudgetWarning(userId);
+  // Pantry-empty alert: idempotent per empty period (atomic claim inside).
+  await checkPantryEmpty(userId).catch((e) => console.error('pantry-empty check failed:', e.message));
 }
 
 module.exports = {

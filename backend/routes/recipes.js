@@ -623,6 +623,10 @@ router.post('/:id/cooked', async (req, res) => {
       })),
     });
 
+    // Cooking may have emptied the pantry — notify once per empty period.
+    const { checkPantryEmpty } = require('../utils/pantryStatus');
+    await checkPantryEmpty(req.userId).catch((e) => console.error('pantry-empty check failed:', e.message));
+
     res.json({
       message: 'Yay! Recipe cooked and pantry updated.',
       ingredientsUsed,

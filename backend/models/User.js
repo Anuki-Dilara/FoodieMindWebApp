@@ -22,6 +22,9 @@ const userSchema = new mongoose.Schema({
   resetPasswordExpires: { type: Date, default: null },
   resetPasswordRequestedAt: { type: Date, default: null },
   passwordChangedAt: { type: Date, default: null },
+  // Set while an empty-pantry notification has been sent for the current
+  // empty period; reset automatically when usable stock returns.
+  pantryEmptyAlerted: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
 });
 

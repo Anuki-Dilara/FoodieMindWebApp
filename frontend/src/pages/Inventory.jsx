@@ -152,8 +152,8 @@ export default function Inventory() {
       {loading ? <LoadingSpinner /> : items.length === 0 ? (
         <EmptyState
           emoji="🥗"
-          title="Your pantry is empty!"
-          message="Add your first food item to start tracking expiry dates and getting recipe suggestions."
+          title="Your pantry is empty"
+          message="Add ingredients to your pantry to get personalized recipe recommendations."
           action={<CuteButton variant="primary" onClick={() => setShowAdd(true)}>Add Your First Item</CuteButton>}
         />
       ) : (

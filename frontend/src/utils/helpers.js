@@ -79,6 +79,7 @@ export const NOTIF_ICONS = {
   budget_warning: '💰',
   shopping_reminder: '🛍️',
   recipe_suggestion: '👨‍🍳',
+  pantry_empty: '🧺',
   general: '🔔',
 };
 

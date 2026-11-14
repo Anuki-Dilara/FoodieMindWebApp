@@ -9,7 +9,7 @@
     "seed": "node seed/seedData.js",
     "seed:recipes": "node seed/seedRecipes.js",
     "update-recipes": "node seed/updateRecipes.js",
-    "test": "node test/moodEngine.test.js && node test/inventory.test.js && node test/moodDifferentiation.test.js && node test/ingredientIdentity.test.js && node test/produceConversion.test.js && node test/moodFilters.test.js && node test/breadConversion.test.js && node test/cheeseConversion.test.js && node test/shoppingListEdit.test.js && node test/pantryDuplicate.test.js && node test/passwordReset.test.js && node test/stapleWater.test.js && node test/aiPantryExplorer.test.js && node test/aiRecipeVariety.test.js",
+    "test": "node test/moodEngine.test.js && node test/inventory.test.js && node test/moodDifferentiation.test.js && node test/ingredientIdentity.test.js && node test/produceConversion.test.js && node test/moodFilters.test.js && node test/breadConversion.test.js && node test/cheeseConversion.test.js && node test/shoppingListEdit.test.js && node test/pantryDuplicate.test.js && node test/passwordReset.test.js && node test/stapleWater.test.js && node test/aiPantryExplorer.test.js && node test/aiRecipeVariety.test.js && node test/pantryEmptyNotification.test.js",
     "seed:inventory": "node seed/seedInventory.js"
   },
   "dependencies": {

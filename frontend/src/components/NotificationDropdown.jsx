@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import API from '../utils/api';
 import { NOTIF_ICONS } from '../utils/helpers';
 
@@ -7,12 +8,25 @@ export default function NotificationDropdown() {
   const [notifications, setNotifications] = useState([]);
   const [open, setOpen] = useState(false);
   const [unread, setUnread] = useState(0);
+  const navigate = useNavigate();
+  const prevUnread = useRef(null);
+  const toastedPantryEmpty = useRef(false);
 
   const fetchNotifications = async () => {
     try {
       const res = await API.get('/notifications');
-      setNotifications(res.data.notifications.slice(0, 5));
+      const list = res.data.notifications || [];
+      setNotifications(list.slice(0, 5));
       setUnread(res.data.unreadCount);
+
+      // Toast once when a new unread pantry-empty alert arrives.
+      const pantryAlert = list.find((n) => n.type === 'pantry_empty' && !n.isRead);
+      if (pantryAlert && prevUnread.current !== null && res.data.unreadCount > prevUnread.current && !toastedPantryEmpty.current) {
+        toastedPantryEmpty.current = true;
+        toast(pantryAlert.title, { icon: '🧺' });
+      }
+      if (!pantryAlert) toastedPantryEmpty.current = false;
+      prevUnread.current = res.data.unreadCount;
     } catch (e) { /* ignore */ }
   };
 
@@ -59,7 +73,10 @@ export default function NotificationDropdown() {
                   <div
                     key={n._id}
                     className={`p-3 border-b border-primary/5 hover:bg-cream cursor-pointer ${!n.isRead ? 'bg-primary/5' : ''}`}
-                    onClick={() => markRead(n._id)}
+                    onClick={async () => {
+                      await markRead(n._id);
+                      if (n.link) { setOpen(false); navigate(n.link); }
+                    }}
                   >
                     <div className="flex gap-2">
                       <span>{NOTIF_ICONS[n.type] || '🔔'}</span>
